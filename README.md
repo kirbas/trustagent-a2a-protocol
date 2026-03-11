@@ -2,104 +2,59 @@
 
 The Execution Accountability Layer for Autonomous AI Systems
 
-TrustAgentAI provides cryptographic non-repudiation and tamper-evident execution records for high-value AI actions.
+TrustAgentAI provides cryptographic non-repudiation and immutable execution records for high-stakes AI actions.
 
-We bridge the gap between AI Connectivity (MCP) and Enterprise Liability. If your agents move money, modify infrastructure, or access regulated data, TrustAgentAI ensures those actions are mathematically and legally provable.
+We bridge the "Liability Gap" between AI connectivity (MCP) and corporate risk. If your agents manage funds, modify infrastructure, or handle sensitive data, TrustAgentAI ensures those actions are mathematically and legally provable.
 
-🛑 The Problem: The Liability Gap
+🛑 The Problem: Liability Gap
 
-AI agents are transitioning from chatbots to autonomous executors (treasury management, automated procurement, devops). However, current tools only provide observability. They cannot:
+AI agents are evolving from chatbots into autonomous executors (treasury management, procurement, DevOps). However, existing tools only provide observability. They cannot:
 
-Prevent Repudiation: Stop an agent owner from claiming "I didn't authorize this $50k wire transfer."
+Prevent Repudiation: An agent owner could claim, "I didn't authorize this $50k transfer."
 
-Bind Intent to Execution: Prove that the resulting action matches the agent's original intent without tampering.
+Bind Intent to Outcome: Prove that the final action matches the agent's original intent without tampering.
 
-Ensure Forensics: Provide a "Black Box" that satisfies auditors (SOC2, SOX) and insurance providers.
+Provide Evidence: Create a "black box" that satisfies auditors (SOC2, SOX) and insurance providers.
 
-🚀 The Solution: A2A Accountability Protocol (v0.4)
+🚀 Current Status: RFC Phase (v0.4)
 
-TrustAgentAI implements a 3-phase (plus optional Ack) cryptographic handshake that decouples agent logic from commitment recording.
+The project is currently in the specification publishing and architectural design phase. We are actively seeking a Technical Co-founder / Rust Engineers to build the reference implementation proxy.
 
-1. Intent Handshake
+⚡ CLI Roadmap (Planned)
 
-The agent generates an Intent Envelope. The Trust Proxy intercepts it, verifies authority via Verifiable Credentials (VC), and signs it.
+Following the release of the initial alpha version, installation will be available via a single command:
 
-Anti-Replay: Strict expires_at TTL and nonce uniqueness.
+# [Planned] Official Installer
+# curl -sL [https://trustagent.ai/install.sh](https://trustagent.ai/install.sh) | bash
 
-MCP Binding: Hard-linked to mcp_deployment_id and tool_schema_hash.
-
-2. Policy Enforcement
-
-The receiving party (Agent B or Tool) evaluates the intent and issues an Acceptance Receipt, cryptographically freezing the policy state (policy_eval_hash).
-
-3. Execution & DAG Ledger
-
-Once finished, an Execution Envelope binds the result to the intent hash. All artifacts are recorded in a Streaming DAG Ledger (Directed Acyclic Graph), ensuring a tamper-evident audit trail even if the network fails.
-
-🛠️ Technical Moats (v0.4 Specs)
-
-Hash Target Rule: We follow a strict JCS (RFC 8785) canonicalization. Hashes are computed on the payload excluding signatures, allowing for clean countersigning (Agent TEE + Proxy).
-
-Dual-Signature Support: High-value actions require a signature from both the Agent's secure enclave and the organizational Proxy.
-
-Streaming DAG: Every handshake phase is a node in a graph, linked by prev_entry_hashes[], preventing "deleted history" attacks.
-
-Dispute Packs: One-click export of Merkle Paths and L2 Anchor receipts for legal arbitration.
-
-⚡ Quick Start
-
-1. Run the Trust Proxy (Rust-based Sidecar)
-
-Wrap your existing MCP server (e.g., a Stripe or SQLite server):
-
-# Install CLI
-curl -sL [https://trustagent.ai/install.sh](https://trustagent.ai/install.sh) | bash
-
-# Wrap your MCP server
-trustagent start --target "npx @modelcontextprotocol/server-sqlite --db prod.db" \
-                 --port 8080 \
-                 --enforce-dual-sig
+# [Planned] Via Cargo (for Rust developers)
+# cargo install trustagent
 
 
-2. Audit an Execution Record
+How to Contribute Now?
 
-View a cryptographically sealed record from your local DAG ledger:
+Review the Protocol Specification v0.4.
 
-{
-  "envelope_type": "IntentEnvelope",
-  "spec_version": "0.4",
-  "trace_id": "urn:uuid:550e8400-e29b-41d4-a716-446655440000",
-  "payload": {
-    "args_hash": "a5b9...9f1",
-    "nonce": "8f42d9a1"
-  },
-  "signatures": [
-    {
-      "role": "proxy",
-      "kid": "did:workload:proxy-A#key-1",
-      "signed_digest": "c4d3...e21",
-      "value": "eyJhbGciOiJFZERTQSJ9..."
-    }
-  ]
-}
+Provide feedback in GitHub Discussions.
 
+Explore ARCHITECTURE.md and submit PRs for core data structures.
 
-🏢 Enterprise Features
+🛠️ Technical Moats (v0.4)
 
-L2 Merkle Anchoring: Batch thousands of receipts and anchor them to Base (Coinbase L2) for immutable finality.
+Hash Target Rule: Strict JCS (RFC 8785) canonicalization. Signatures do not break the object hash.
 
-Dispute Console: A dashboard for CISO and Legal teams to replay incidents and verify Merkle proofs.
+Dual-Signature Support: Support for countersigning by both the agent (TEE) and the proxy.
 
-Zero-Trust Identity: Native integration with SPIFFE/OIDC workload identities.
+Merkle Anchoring: Anchoring local logs to L2 blockchains (Base/Ethereum) for absolute finality.
 
-Explore Enterprise ➡️
+Dispute Packs: One-click evidence export for legal arbitration.
 
 🤝 Contributing
 
-Liability infrastructure must be open. We are looking for contributors interested in Rust (Tokio/Axum), Cryptography (Ed25519/JCS), and AI Agent Frameworks.
+Liability infrastructure must be open. We are looking for Rust developers, cryptography experts, and AI security specialists.
 
-Please check CONTRIBUTING.md and our Architecture Specs.
+Please refer to CONTRIBUTING.md and ARCHITECTURE.md.
 
 📄 License
 
-Licensed under the Apache License, Version 2.0. See LICENSE for more information.
+This project is licensed under the Apache License 2.0. See the LICENSE file for details.
