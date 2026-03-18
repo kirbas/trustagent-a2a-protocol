@@ -1,0 +1,14 @@
+src/
+example.ts
+proxy-test.ts
+*.test.ts
+*.spec.ts
+.github/
+docs/
+node_modules/
+tsconfig.json
+.eslintrc*
+.prettierrc*
+.env
+*.log
+*.tgz
