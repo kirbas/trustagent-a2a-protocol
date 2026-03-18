@@ -1,0 +1,81 @@
+{
+  "name": "@trustagentai/a2a-core",
+  "version": "0.1.0-alpha.1",
+  "description": "Cryptographic accountability layer for MCP agent-to-agent interactions. Ed25519 receipts, DAG ledger, Merkle batching, Dispute Packs.",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
+    },
+    "./crypto": {
+      "import": "./dist/src/crypto.js",
+      "types": "./dist/src/crypto.d.ts"
+    },
+    "./envelopes": {
+      "import": "./dist/src/envelopes.js",
+      "types": "./dist/src/envelopes.d.ts"
+    },
+    "./ledger": {
+      "import": "./dist/src/ledger.js",
+      "types": "./dist/src/ledger.d.ts"
+    },
+    "./proxy": {
+      "import": "./dist/src/trust-proxy.js",
+      "types": "./dist/src/trust-proxy.d.ts"
+    },
+    "./nonce-registry": {
+      "import": "./dist/src/nonce-registry.js",
+      "types": "./dist/src/nonce-registry.d.ts"
+    },
+    "./risk-budget": {
+      "import": "./dist/src/risk-budget.js",
+      "types": "./dist/src/risk-budget.d.ts"
+    }
+  },
+  "files": [
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts",
+    "dist/src/**/*.js.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:check": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "example": "tsx example.ts",
+    "proxy:test": "tsx proxy-test.ts",
+    "proxy:server": "tsx src/proxy-server.ts"
+  },
+  "keywords": [
+    "mcp", "ai-agents", "cryptography", "non-repudiation",
+    "ed25519", "merkle", "accountability", "a2a", "trust", "audit"
+  ],
+  "author": "TrustAgentAI Core Team",
+  "license": "Apache-2.0",
+  "homepage": "https://trustagentai.net",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kirbas/trustagent-a2a-protocol.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kirbas/trustagent-a2a-protocol/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^2.1.0",
+    "canonicalize": "^2.0.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
