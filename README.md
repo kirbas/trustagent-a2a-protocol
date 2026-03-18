@@ -1,5 +1,10 @@
 # TrustAgentAI · A2A Accountability Protocol
 
+[![npm version](https://img.shields.io/npm/v/@trustagentai/a2a-core)](https://www.npmjs.com/package/@trustagentai/a2a-core)
+[![npm downloads](https://img.shields.io/npm/dm/@trustagentai/a2a-core)](https://www.npmjs.com/package/@trustagentai/a2a-core)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](./LICENSE)
+[![GitHub tag](https://img.shields.io/github/v/tag/kirbas/trustagent-a2a-protocol)](https://github.com/kirbas/trustagent-a2a-protocol/releases)
+
 **Your MCP agent just called `execute_wire_transfer`.**  
 **Can you prove it happened? Can you prove who authorized it? Can you prove the result wasn't tampered with?**
 
