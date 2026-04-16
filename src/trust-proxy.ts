@@ -221,6 +221,8 @@ export interface AcceptResult {
  */
 export class ProxyBGateway {
   private intentEntryHashes = new Map<string, string>(); // trace_id → entry_hash
+  // Store per-transaction metadata needed at execution time
+  private intentMeta = new Map<string, { initiatorDid: string; estimatedCostUsd: number }>();
 
   constructor(private cfg: ProxyBConfig) {}
 
@@ -293,6 +295,12 @@ export class ProxyBGateway {
     const prevHash = this.intentEntryHashes.get(intent.trace_id);
     this.cfg.ledger.append("ACCEPTANCE_RECORD", acceptance, prevHash ? [prevHash] : []);
 
+    // 8. Store metadata for recordSpend at execution time
+    this.intentMeta.set(intent.trace_id, {
+      initiatorDid: intent.initiator.did,
+      estimatedCostUsd: estimatedCostUsd,
+    });
+
     return { acceptance };
   }
 
@@ -304,8 +312,16 @@ export class ProxyBGateway {
       intentHash ? [intentHash] : []
     );
 
-    // Record spend after successful execution
-    // (In production: extract cost from the execution envelope metadata)
-    // this.cfg.budgetEngine.recordSpend(initiatorDid, actualCostUsd);
+    // D4: Record actual spend only on successful execution
+    if (execution.status === "COMPLETED") {
+      const meta = this.intentMeta.get(execution.trace_id);
+      if (meta) {
+        this.cfg.budgetEngine.recordSpend(meta.initiatorDid, meta.estimatedCostUsd);
+      }
+    }
+
+    // Clean up stored metadata — transaction lifecycle is complete
+    this.intentMeta.delete(execution.trace_id);
+    this.intentEntryHashes.delete(execution.trace_id);
   }
 }
