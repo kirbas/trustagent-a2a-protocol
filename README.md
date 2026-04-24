@@ -162,6 +162,8 @@ No changes to your agents or tools required.
 | **Dual-signature support** | Agent + Proxy countersign for high-value actions (TEE-ready) |
 | **Privacy** | Only `args_hash` and `output_hash` on-chain — raw args stay off-chain |
 | **Dispute-grade proof (D2)** | Dispute Pack: Merkle path + signed artifacts + L2 anchor ref |
+| **Content Provenance (v0.5)** | Cryptographic receipt linking model + session + prompt hash + artifact hash |
+| **Regulatory alignment (v0.5)** | EU AI Act Art. 52 & 13 · DSA · US EO on AI · California AB 2602 |
 
 ---
 
@@ -190,12 +192,19 @@ docs/
 
 ## Protocol specification
 
-The full A2A Accountability Protocol v0.4 is published at:  
-**[trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol)**
-- Protocol spec v0.4: [trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol)
-- Protocol spec v0.5: [trustagentai.net/trustagentai-a2a-protocol-v05](https://trustagentai.net/trustagentai-a2a-protocol-v05) ← Content Provenance Layer
+| Version | Status | Link |
+|---|---|---|
+| **v0.5** | Draft · Current | **[trustagentai.net/trustagentai-a2a-protocol-v05](https://trustagentai.net/trustagentai-a2a-protocol-v05)** |
+| v0.4 | Superseded | [trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol) |
 
-Key sections:
+**What's new in v0.5 — Content Provenance Layer:**
+- §4.4 `ContentProvenanceReceipt` — new envelope type for AI-generated artifacts
+- §9 Content Provenance use cases: deepfakes, malware, copyright, disinformation
+- §10 Regulatory alignment: EU AI Act, DSA, US Executive Order, California AB 2602/3211
+- C2PA interoperability via `c2pa_manifest_hash` field
+- Privacy-preserving: only `content_hash` + ephemeral `session_did` on-chain
+
+**v0.4 key sections (still valid):**
 - §3 Transaction Lifecycle — the 3-phase cryptographic handshake
 - §4 Data Formats — Hash Target Rule (JCS + SHA-256), envelope schemas
 - §5 Validation Rules — TTL, anti-replay, dual-signature policy
@@ -206,7 +215,7 @@ Key sections:
 
 ## Roadmap
 
-### Now · v0.4 RFC phase
+### Done · v0.4
 - [x] Protocol specification v0.4
 - [x] TypeScript reference implementation
 - [x] Ed25519 signing + JCS canonicalization
@@ -215,20 +224,27 @@ Key sections:
 - [x] Risk budget engine (D4)
 - [x] Dispute Pack generation + Merkle inclusion proof
 - [x] HTTP server with `/accept`, `/executed`, `/dispute/:id`
+- [x] npm package `@trustagentai/a2a-core` published
+- [x] `recordSpend()` budget enforcement after execution
 
-### Next · v0.5
-- [ ] Publish `@trustagentai/a2a-core` to npm
+### Now · v0.5 RFC phase
+- [x] Protocol specification v0.5 — Content Provenance Layer
+- [x] `ContentProvenanceReceipt` envelope schema
+- [x] `PROVENANCE_RECORD` event type in DAG ledger
+- [x] Regulatory alignment section (EU AI Act, DSA, US EO, CA AB 2602)
+- [x] C2PA interoperability spec
+- [ ] TypeScript implementation of `ContentProvenanceReceipt`
 - [ ] Python SDK
 - [ ] L2 anchoring integration (Base / Arbitrum)
 - [ ] Verifiable Credential (VC) policy loader
 - [ ] Native MCP SDK integration
-- [ ] `good first issue` tasks — see [Issues](https://github.com/kirbas/trustagent-a2a-protocol/issues)
 
-### Later
+### Later · v0.6
 - [ ] Rust implementation (performance-critical proxy path)
 - [ ] Hosted Timestamp Registry (cloud, SLA-backed)
 - [ ] Dispute Console UI (compliance dashboard)
 - [ ] TEE attestation (SGX / TDX) for agent identity
+- [ ] Cross-platform provenance query API (hash → receipt lookup)
 
 ---
 
@@ -273,8 +289,8 @@ Apache 2.0 includes an explicit patent grant — important for cryptographic pro
 ## Links
 
 - Website: [trustagentai.net](https://trustagentai.net)
-- Protocol spec: [trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol)
-- - Protocol spec v0.4: [trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol)
-- Protocol spec v0.5: [trustagentai.net/trustagentai-a2a-protocol-v05](https://trustagentai.net/trustagentai-a2a-protocol-v05) ← Content Provenance Layer
+- Protocol spec v0.5: [trustagentai.net/trustagentai-a2a-protocol-v05](https://trustagentai.net/trustagentai-a2a-protocol-v05)
+- Protocol spec v0.4: [trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol)
+- npm: [@trustagentai/a2a-core](https://www.npmjs.com/package/@trustagentai/a2a-core)
 - LinkedIn: [linkedin.com/company/trustagentai](https://www.linkedin.com/company/trustagentai/)
 - Discussions: [GitHub Discussions](https://github.com/kirbas/trustagent-a2a-protocol/discussions)
