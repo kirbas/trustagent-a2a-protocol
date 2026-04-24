@@ -192,6 +192,8 @@ docs/
 
 The full A2A Accountability Protocol v0.4 is published at:  
 **[trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol)**
+- Protocol spec v0.4: [trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol)
+- Protocol spec v0.5: [trustagentai.net/trustagentai-a2a-protocol-v05](https://trustagentai.net/trustagentai-a2a-protocol-v05) ← Content Provenance Layer
 
 Key sections:
 - §3 Transaction Lifecycle — the 3-phase cryptographic handshake
@@ -272,5 +274,7 @@ Apache 2.0 includes an explicit patent grant — important for cryptographic pro
 
 - Website: [trustagentai.net](https://trustagentai.net)
 - Protocol spec: [trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol)
+- - Protocol spec v0.4: [trustagentai.net/trustagentai-a2a-protocol](https://trustagentai.net/trustagentai-a2a-protocol)
+- Protocol spec v0.5: [trustagentai.net/trustagentai-a2a-protocol-v05](https://trustagentai.net/trustagentai-a2a-protocol-v05) ← Content Provenance Layer
 - LinkedIn: [linkedin.com/company/trustagentai](https://www.linkedin.com/company/trustagentai/)
 - Discussions: [GitHub Discussions](https://github.com/kirbas/trustagent-a2a-protocol/discussions)
