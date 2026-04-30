@@ -45,6 +45,7 @@
   "scripts": {
     "build": "tsc",
     "build:check": "tsc --noEmit",
+    "test": "vitest run",
     "prepublishOnly": "npm run build",
     "example": "node --loader ts-node/esm example.ts",
     "proxy:test": "node --loader ts-node/esm proxy-test.ts",
@@ -84,6 +85,7 @@
     "@types/node": "^20.0.0",
     "@types/uuid": "^10.0.0",
     "typescript": "^5.0.0",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "vitest": "^3.2.4"
   }
 }
