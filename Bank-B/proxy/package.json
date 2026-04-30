@@ -1,0 +1,23 @@
+{
+  "name": "@demo/bank-b-proxy",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/src/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/src/server.js"
+  },
+  "dependencies": {
+    "@trustagentai/a2a-core": "file:../../trust-agent",
+    "better-sqlite3": "^9.6.0",
+    "cors": "^2.8.6",
+    "express": "^4.22.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
