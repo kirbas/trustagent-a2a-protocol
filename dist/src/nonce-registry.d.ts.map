@@ -1,0 +1,1 @@
+{"version":3,"file":"nonce-registry.d.ts","sourceRoot":"","sources":["../../src/nonce-registry.ts"],"names":[],"mappings":"AAAA;;;;;;;GAOG;AAQH,qBAAa,aAAa;IACxB,OAAO,CAAC,KAAK,CAAiC;IAE9C;;;;OAIG;IACH,OAAO,CAAC,YAAY,EAAE,MAAM,EAAE,KAAK,EAAE,MAAM,EAAE,SAAS,EAAE,MAAM,GAAG,OAAO;IAWxE;;OAEG;IACH,WAAW,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO;IAKvC,OAAO,CAAC,aAAa;IAOrB,IAAI,IAAI,MAAM;CAGf"}

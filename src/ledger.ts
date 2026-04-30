@@ -12,7 +12,7 @@
  */
 
 import { sha256Json } from "./crypto.js";
-import { IntentEnvelope, AcceptanceReceipt, ExecutionEnvelope } from "./envelopes.js";
+import type { IntentEnvelope, AcceptanceReceipt, ExecutionEnvelope, ContentProvenanceReceipt } from "./envelopes.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -20,12 +20,12 @@ export type EventType =
   | "INTENT_RECORD"
   | "ACCEPTANCE_RECORD"
   | "EXECUTION_RECORD"
-  | "ACK_RECORD";
+  | "ACK_RECORD" | "PROVENANCE_RECORD";
 
 export type ArtifactEnvelope =
   | IntentEnvelope
   | AcceptanceReceipt
-  | ExecutionEnvelope;
+  | ExecutionEnvelope | ContentProvenanceReceipt;
 
 export interface LedgerEntry {
   entry_id: number;

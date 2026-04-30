@@ -20,7 +20,7 @@ import { DAGLedger } from "./ledger.js";
 import { NonceRegistry } from "./nonce-registry.js";
 import { RiskBudgetEngine } from "./risk-budget.js";
 import { ProxyBGateway } from "./trust-proxy.js";
-import { IntentEnvelope, ExecutionEnvelope } from "./envelopes.js";
+import type { IntentEnvelope, ExecutionEnvelope } from "./envelopes.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 
