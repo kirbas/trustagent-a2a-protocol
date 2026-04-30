@@ -15,11 +15,12 @@ import {
   buildIntentEnvelope,
   buildAcceptanceReceipt,
   buildExecutionEnvelope,
+  buildContentProvenanceReceipt,
 } from "./src/envelopes.js";
 import { DAGLedger, verifyMerkleProof } from "./src/ledger.js";
 
 async function main() {
-  console.log("=== TrustAgentAI A2A Protocol v0.4 — E2E Demo ===\n");
+  console.log("=== TrustAgentAI A2A Protocol v0.5 — E2E Demo ===\n");
 
   // ── 1. Generate keys for Proxy A and Proxy B ────────────────────────────
   const proxyAKey = await generateKeyPair("did:workload:proxy-A#key-1");
@@ -117,6 +118,27 @@ async function main() {
   const e1 = ledger.append("INTENT_RECORD", intentEnv);
   const e2 = ledger.append("ACCEPTANCE_RECORD", acceptanceReceipt, [e1.entry_hash]);
   const e3 = ledger.append("EXECUTION_RECORD", executionEnv, [e1.entry_hash, e2.entry_hash]);
+
+  // ── 6.5 Content Provenance Receipt (v0.5) ───────────────────────────
+  // NOTE: content_hash SHOULD be SHA-256 over raw artifact bytes.
+  const generatedText = "Refund executed. Receipt issued."; // demo artifact
+  const provenance = await buildContentProvenanceReceipt({
+    executionEnvelope: executionEnv,
+    content_type: "text",
+    content_hash: sha256Json({ text: generatedText }), // demo-only; replace with sha256(bytes)
+    model_id: "demo-model",
+    tool_name: "execute_wire_transfer",
+    prompt_hash: sha256Json({ prompt: "refund customer 123 for $40" }), // demo-only
+    policy_eval_hash: acceptanceReceipt.policy_eval_hash,
+    proxyKey: proxyBKey,
+  });
+
+  const e4 = ledger.append("PROVENANCE_RECORD", provenance, [e3.entry_hash]);
+  console.log("\n✓ Content Provenance Receipt built");
+  console.log("  execution_hash:", provenance.execution_hash);
+  console.log("  content_hash:", provenance.content.content_hash);
+  console.log("  Entry #4 (Provenance) hash:", e4.entry_hash.slice(0, 16) + "...");
+
 
   console.log("\n✓ Entries appended to DAG Ledger");
   console.log("  Entry #1 (Intent)     hash:", e1.entry_hash.slice(0, 16) + "...");
