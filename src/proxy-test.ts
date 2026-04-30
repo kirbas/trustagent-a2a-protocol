@@ -8,12 +8,13 @@
  * For the live HTTP version, run: npx tsx src/proxy-server.ts
  */
 
-import { generateKeyPair } from "./src/crypto.js";
-import { DAGLedger } from "./src/ledger.js";
-import { NonceRegistry } from "./src/nonce-registry.js";
-import { RiskBudgetEngine } from "./src/risk-budget.js";
-import { ProxyAGateway, ProxyBGateway, McpToolCall } from "./src/trust-proxy.js";
-import { IntentEnvelope, AcceptanceReceipt } from "./src/envelopes.js";
+import { generateKeyPair } from "./crypto.js";
+import { DAGLedger } from "./ledger.js";
+import { NonceRegistry } from "./nonce-registry.js";
+import { RiskBudgetEngine } from "./risk-budget.js";
+import { ProxyAGateway, ProxyBGateway } from "./trust-proxy.js";
+import type { McpToolCall } from "./trust-proxy.js";
+import type { IntentEnvelope, AcceptanceReceipt } from "./envelopes.js";
 
 // ── Fake in-process "network" between Proxy A and Proxy B ────────────────────
 
@@ -113,7 +114,7 @@ async function main() {
     },
   };
 
-  const result1 = await proxyA.forwardToolCall(call1, async (_call) => ({
+  const result1 = await proxyA.forwardToolCall(call1, async (_call: any) => ({
     transaction_id: "txn_stripe_001",
     status: "settled",
     settled_at: new Date().toISOString(),
@@ -228,7 +229,7 @@ async function main() {
     const traceId = result1.result._a2a.intent_envelope.trace_id;
     const pack = ledger.getDisputePack(traceId);
     console.log(`\n✓ Dispute Pack for ${traceId.slice(0, 30)}...`);
-    console.log("  Artifacts:", pack.entries.map((e) => e.event_type).join(" → "));
+    console.log("  Artifacts:", pack.entries.map((e: any) => e.event_type).join(" → "));
     console.log("  Inclusion proofs:", pack.inclusionProofs.length);
   }
 
