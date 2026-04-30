@@ -5,14 +5,8 @@
  */
 
 import { v4 as uuidv4 } from "uuid";
-import {
-  KeyPair,
-  SignatureBlock,
-  generateNonce,
-  signEnvelope,
-  sha256Json,
-  computeEnvelopeHash,
-} from "./crypto.js";
+import { generateNonce, signEnvelope, sha256Json, computeEnvelopeHash } from "./crypto.js";
+import type { KeyPair, SignatureBlock } from "./crypto.js";
 
 // ─── Intent Envelope ─────────────────────────────────────────────────────────
 
@@ -33,7 +27,7 @@ export interface IntentEnvelopeParams {
 
 export interface IntentEnvelope {
   envelope_type: "IntentEnvelope";
-  spec_version: "0.4";
+  spec_version: "0.5";
   trace_id: string;
   timestamp: string;
   expires_at: string;
@@ -58,7 +52,7 @@ export async function buildIntentEnvelope(
 
   const base: Omit<IntentEnvelope, "signatures"> = {
     envelope_type: "IntentEnvelope",
-    spec_version: "0.4",
+    spec_version: "0.5",
     trace_id: traceId,
     timestamp: now.toISOString(),
     expires_at: expiresAt.toISOString(),
@@ -113,7 +107,7 @@ export interface AcceptanceReceiptParams {
 
 export interface AcceptanceReceipt {
   envelope_type: "AcceptanceReceipt";
-  spec_version: "0.4";
+  spec_version: "0.5";
   trace_id: string;
   timestamp: string;
   expires_at: string;
@@ -131,7 +125,7 @@ export async function buildAcceptanceReceipt(
 
   const base: Omit<AcceptanceReceipt, "signatures"> = {
     envelope_type: "AcceptanceReceipt",
-    spec_version: "0.4",
+    spec_version: "0.5",
     trace_id: p.intentEnvelope.trace_id,
     timestamp: now.toISOString(),
     expires_at: expiresAt.toISOString(),
@@ -156,7 +150,7 @@ export interface ExecutionEnvelopeParams {
 
 export interface ExecutionEnvelope {
   envelope_type: "ExecutionEnvelope";
-  spec_version: "0.4";
+  spec_version: "0.5";
   trace_id: string;
   timestamp: string;
   intent_hash: string;
@@ -171,7 +165,7 @@ export async function buildExecutionEnvelope(
 ): Promise<ExecutionEnvelope> {
   const base: Omit<ExecutionEnvelope, "signatures"> = {
     envelope_type: "ExecutionEnvelope",
-    spec_version: "0.4",
+    spec_version: "0.5",
     trace_id: p.intentEnvelope.trace_id,
     timestamp: new Date().toISOString(),
     intent_hash: computeEnvelopeHash(
@@ -187,3 +181,100 @@ export async function buildExecutionEnvelope(
   const sig = await signEnvelope(base as Record<string, unknown>, p.proxyKey, "proxy");
   return { ...base, signatures: [sig] };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Content Provenance Receipt (v0.5)
+// ─────────────────────────────────────────────────────────────────────────────
+// Purpose: prove the existence/origin of a generated artifact WITHOUT storing it.
+// Stores only hashes + minimal metadata, bound to an ExecutionEnvelope.
+
+export interface ContentProvenanceReceiptParams {
+  executionEnvelope: ExecutionEnvelope;
+
+  content_type: "text" | "image" | "audio" | "video" | "code" | "other";
+  content_hash: string;          // sha256 of raw artifact bytes (NOT JSON)
+  content_size_bytes?: number;
+
+  // Optional context
+  model_id?: string;             // e.g. "gpt-5", "claude", "local-llm"
+  tool_name?: string;            // MCP tool name
+  prompt_hash?: string;          // sha256(prompt text)
+  policy_eval_hash?: string;     // snapshot hash if available
+
+  ttlSeconds?: number;           // default 30s
+  proxyKey: KeyPair;             // signer key
+}
+
+export interface ContentProvenanceReceipt {
+  envelope_type: "ContentProvenanceReceipt";
+  spec_version: "0.5";
+  trace_id: string;
+  timestamp: string;
+  expires_at: string;
+
+  // Strong binding to execution
+  execution_hash: string;
+  intent_hash: string;
+  acceptance_hash: string;
+  output_hash: string;
+
+  content: {
+    content_type: "text" | "image" | "audio" | "video" | "code" | "other";
+    content_hash: string;
+    content_size_bytes?: number;
+  };
+
+  context?: {
+    model_id?: string;
+    tool_name?: string;
+    prompt_hash?: string;
+    policy_eval_hash?: string;
+  };
+
+  signatures: SignatureBlock[];
+}
+
+export async function buildContentProvenanceReceipt(
+  p: ContentProvenanceReceiptParams
+): Promise<ContentProvenanceReceipt> {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + (p.ttlSeconds ?? 30) * 1000);
+
+  const execution_hash = computeEnvelopeHash(
+    p.executionEnvelope as unknown as Record<string, unknown>
+  );
+
+  const base: Omit<ContentProvenanceReceipt, "signatures"> = {
+    envelope_type: "ContentProvenanceReceipt",
+    spec_version: "0.5",
+    trace_id: p.executionEnvelope.trace_id,
+    timestamp: now.toISOString(),
+    expires_at: expiresAt.toISOString(),
+
+    execution_hash,
+    intent_hash: p.executionEnvelope.intent_hash,
+    acceptance_hash: p.executionEnvelope.acceptance_hash,
+    output_hash: p.executionEnvelope.result.output_hash,
+
+    content: {
+      content_type: p.content_type,
+      content_hash: p.content_hash,
+      ...(p.content_size_bytes != null ? { content_size_bytes: p.content_size_bytes } : {}),
+    },
+
+    ...(p.model_id || p.tool_name || p.prompt_hash || p.policy_eval_hash
+      ? {
+          context: {
+            ...(p.model_id ? { model_id: p.model_id } : {}),
+            ...(p.tool_name ? { tool_name: p.tool_name } : {}),
+            ...(p.prompt_hash ? { prompt_hash: p.prompt_hash } : {}),
+            ...(p.policy_eval_hash ? { policy_eval_hash: p.policy_eval_hash } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const sig = await signEnvelope(base as Record<string, unknown>, p.proxyKey, "proxy");
+  return { ...base, signatures: [sig] };
+}
+

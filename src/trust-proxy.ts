@@ -26,15 +26,10 @@
  * This file is the CORE LOGIC. The HTTP server wrapper is in proxy-server.ts.
  */
 
-import { KeyPair, verifySignature } from "./crypto.js";
-import {
-  buildIntentEnvelope,
-  buildAcceptanceReceipt,
-  buildExecutionEnvelope,
-  IntentEnvelope,
-  AcceptanceReceipt,
-  ExecutionEnvelope,
-} from "./envelopes.js";
+import { verifySignature } from "./crypto.js";
+import type { KeyPair } from "./crypto.js";
+import { buildIntentEnvelope, buildAcceptanceReceipt, buildExecutionEnvelope } from "./envelopes.js";
+import type { IntentEnvelope, AcceptanceReceipt, ExecutionEnvelope, ContentProvenanceReceipt } from "./envelopes.js";
 import { DAGLedger } from "./ledger.js";
 import { NonceRegistry } from "./nonce-registry.js";
 import { RiskBudgetEngine } from "./risk-budget.js";
