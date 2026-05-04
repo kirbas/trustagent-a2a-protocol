@@ -28,3 +28,12 @@ export interface DisputePack {
   entries: unknown[];
   inclusionProofs: unknown[];
 }
+
+export interface AnchorEvent {
+  traceId: string;
+  merkleRoot: string;
+  txHash: string;
+  blockNumber: number;
+  basescanUrl: string;
+  ts: string;
+}

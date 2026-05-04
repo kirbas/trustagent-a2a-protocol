@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { useSSE } from "../hooks/useSSE";
-import type { HandshakeEvent } from "../types";
+import type { HandshakeEvent, AnchorEvent } from "../types";
 
 const PROXY_A = import.meta.env.VITE_PROXY_A_URL ?? "http://localhost:3001";
 const PROXY_B = import.meta.env.VITE_PROXY_B_URL ?? "http://localhost:3002";
@@ -8,6 +8,8 @@ const PROXY_B = import.meta.env.VITE_PROXY_B_URL ?? "http://localhost:3002";
 interface TraceStep {
   label: string;
   ok: boolean;
+  basescanUrl?: string;
+  pending?: boolean;
 }
 
 interface Trace {
@@ -24,6 +26,13 @@ function parseAll(raws: string[]): HandshakeEvent[] {
   });
 }
 
+function parseAnchors(raws: string[]): AnchorEvent[] {
+  return raws.flatMap((d) => {
+    try { return [JSON.parse(d) as AnchorEvent]; }
+    catch { return []; }
+  });
+}
+
 export function HandshakeVisualizer({
   resetToken = 0,
   onReset,
@@ -35,6 +44,8 @@ export function HandshakeVisualizer({
 
   const demoRaw = useSSE(`${PROXY_A}/events`, "demo-triggered", resetToken);
   const execRaw = useSSE(`${PROXY_A}/events`, "execution-complete", resetToken);
+  const anchorPendingRaw = useSSE(`${PROXY_A}/events`, "anchor-pending", resetToken);
+  const anchorCompleteRaw = useSSE(`${PROXY_A}/events`, "anchor-complete", resetToken);
   const acceptedRaw = useSSE(`${PROXY_B}/events`, "intent-accepted", resetToken);
   const rejectedRaw = useSSE(`${PROXY_B}/events`, "intent-rejected", resetToken);
 
@@ -77,8 +88,33 @@ export function HandshakeVisualizer({
       });
     });
 
+    // Anchor pending — show spinner on the trace while waiting for chain confirmation
+    parseAnchors(anchorPendingRaw).forEach((e) => {
+      const t = map.get(e.traceId);
+      if (!t) return;
+      // Only add if not already anchored
+      const alreadyAnchored = t.steps.some((s) => s.basescanUrl);
+      if (!alreadyAnchored) {
+        t.steps.push({ label: "ANCHORING ⏳", ok: true, pending: true });
+      }
+    });
+
+    // Anchor complete — replace pending step with confirmed link
+    parseAnchors(anchorCompleteRaw).forEach((e) => {
+      const t = map.get(e.traceId);
+      if (!t) return;
+      // Remove pending step if present
+      const pendingIdx = t.steps.findIndex((s) => s.pending);
+      if (pendingIdx !== -1) t.steps.splice(pendingIdx, 1);
+      t.steps.push({
+        label: `ANCHORED ⛓ block ${e.blockNumber}`,
+        ok: true,
+        basescanUrl: e.basescanUrl,
+      });
+    });
+
     return Array.from(map.values());
-  }, [acceptedRaw, rejectedRaw, execRaw]);
+  }, [acceptedRaw, rejectedRaw, execRaw, anchorPendingRaw, anchorCompleteRaw]);
 
   const trigger = () => {
     fetch(`${PROXY_A}/trigger`, { method: "POST" });
@@ -159,7 +195,14 @@ export function HandshakeVisualizer({
         {traces.map((trace) => {
           const isSuccess = trace.steps.some((s) => s.label.startsWith("EXECUTED"));
           const isDenied = trace.steps.some((s) => s.label.startsWith("REJECTED"));
-          const borderColor = isSuccess ? "#4caf50" : isDenied ? "#f44336" : "#888";
+          const isAnchored = trace.steps.some((s) => s.basescanUrl);
+          const borderColor = isAnchored
+            ? "#f0a500"
+            : isSuccess
+            ? "#4caf50"
+            : isDenied
+            ? "#f44336"
+            : "#888";
           return (
             <div
               key={trace.traceId}
@@ -181,21 +224,52 @@ export function HandshakeVisualizer({
                 trace:…{(trace.traceId || "").slice(-12)}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                {trace.steps.map((step, i) => (
-                  <span
-                    key={i}
-                    style={{
-                      padding: "2px 8px",
-                      borderRadius: 3,
-                      fontSize: 10,
-                      background: step.ok ? "#0d2b0d" : "#2b0d0d",
-                      color: step.ok ? "#4caf50" : "#f44336",
-                      border: `1px solid ${step.ok ? "#4caf50" : "#f44336"}`,
-                    }}
-                  >
-                    {step.label}
-                  </span>
-                ))}
+                {trace.steps.map((step, i) =>
+                  step.basescanUrl ? (
+                    <a
+                      key={i}
+                      href={step.basescanUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        padding: "2px 8px",
+                        borderRadius: 3,
+                        fontSize: 10,
+                        background: "#2b1f00",
+                        color: "#f0a500",
+                        border: "1px solid #f0a500",
+                        textDecoration: "none",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {step.label} ↗
+                    </a>
+                  ) : (
+                    <span
+                      key={i}
+                      style={{
+                        padding: "2px 8px",
+                        borderRadius: 3,
+                        fontSize: 10,
+                        background: step.pending
+                          ? "#1a1a00"
+                          : step.ok
+                          ? "#0d2b0d"
+                          : "#2b0d0d",
+                        color: step.pending
+                          ? "#999900"
+                          : step.ok
+                          ? "#4caf50"
+                          : "#f44336",
+                        border: `1px solid ${
+                          step.pending ? "#666600" : step.ok ? "#4caf50" : "#f44336"
+                        }`,
+                      }}
+                    >
+                      {step.label}
+                    </span>
+                  )
+                )}
               </div>
             </div>
           );
