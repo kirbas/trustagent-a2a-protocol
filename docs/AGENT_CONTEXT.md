@@ -32,7 +32,7 @@ Trust-Agent/
 ├── Bank-A/
 │   ├── proxy/
 │   │   ├── src/
-│   │   │   ├── server.ts          Express app: /invoke /trigger /reset /thought /events /envelopes /health
+│   │   │   ├── server.ts          Express app: /invoke /trigger /trigger-done /reset /thought /events /envelopes /health
 │   │   │   ├── db.ts              better-sqlite3: 4-table schema, saveEnvelope(), getEnvelopes(), clearEnvelopes()
 │   │   │   ├── sse.ts             SseBus: addClient(res), broadcast(event, data)
 │   │   │   └── key-exchange.ts    registerWithProxyB() retry loop (25× @ 1s)
@@ -194,16 +194,17 @@ if (result.error) {
 
 ## Python Agent Design
 
-**`Bank-A/agent/agent.py`** — loops continuously:
+**`Bank-A/agent/agent.py`** — loops, waiting for a button press each cycle:
 1. Poll `GET /health` until ready
 2. Loop forever:
    a. Poll `GET /trigger-status` until `{ triggered: true }`
    b. Scenario 1: `think()` × 3 → `POST /invoke` ($5k) → `think()` × 2
    c. `sleep(3)`
    d. Scenario 2: `think()` × 2 → `POST /invoke` ($50k) → `think()` × 2
-   e. `sleep(2)` → go back to (a)
+   e. `POST /trigger-done` → sets `triggered = false` on the proxy
+   f. Go back to (a) and wait for the next button press
 
-`POST /reset` on Bank-A sets `triggered = false`, causing the agent to wait for the next trigger.
+`POST /trigger-done` resets only the `triggered` flag without touching the DB. `POST /reset` (called by the UI's "↺ Clear" button) also clears the DB and broadcasts `demo-reset`.
 
 `think(text)` = `POST /thought { text }` + `sleep(1.2)` to pace the UI.
 

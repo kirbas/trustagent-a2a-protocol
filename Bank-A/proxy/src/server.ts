@@ -45,6 +45,11 @@ async function main(): Promise<void> {
     res.json({ ok: true });
   });
 
+  app.post("/trigger-done", (_req, res) => {
+    triggered = false;
+    res.json({ ok: true });
+  });
+
   app.post("/reset", (_req, res) => {
     triggered = false;
     clearEnvelopes();
