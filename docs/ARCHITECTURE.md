@@ -225,6 +225,7 @@ data: {"traceId":"urn:uuid:...","tool":"get_security_report","cost":5000,"ts":".
 | GET | `/health` | `{ ok: true }` |
 | POST | `/trigger` | Sets demo flag; broadcasts `demo-triggered` SSE |
 | GET | `/trigger-status` | `{ triggered: boolean }` |
+| POST | `/trigger-done` | Resets `triggered` to false (no DB clear); called by agent after each cycle |
 | POST | `/reset` | Resets `triggered`, clears SQLite, broadcasts `demo-reset` SSE |
 | POST | `/thought` | Body: `{ text }` — broadcasts `thought` SSE |
 | GET | `/events` | SSE stream |

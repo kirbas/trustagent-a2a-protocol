@@ -42,6 +42,13 @@ def think(text: str):
     time.sleep(1.2)
 
 
+def signal_done():
+    try:
+        requests.post(f"{PROXY_URL}/trigger-done", timeout=5)
+    except Exception:
+        pass
+
+
 def invoke(tool: str, args: dict, cost: float) -> dict:
     r = requests.post(
         f"{PROXY_URL}/invoke",
@@ -101,5 +108,5 @@ if __name__ == "__main__":
         print("[bank-a-agent] === Scenario 2: Breach attempt $50k ===")
         scenario_breach()
 
+        signal_done()
         print("[bank-a-agent] Demo complete. Waiting for next trigger...")
-        time.sleep(2)
