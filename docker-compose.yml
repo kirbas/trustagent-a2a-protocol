@@ -33,6 +33,8 @@ services:
       PROXY_B_URL: "http://bank-b-proxy:3002"
       DB_PATH: "/data/bank-a.db"
       FRONTEND_ORIGIN: "http://localhost:3000"
+      RPC_URL: "${RPC_URL}"
+      PRIVATE_KEY: "${PRIVATE_KEY}"
     volumes:
       - bank-a-data:/data
     depends_on:

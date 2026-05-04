@@ -141,7 +141,7 @@ export class ProxyAGateway {
       });
       const body = await resp.json() as { acceptance?: AcceptanceReceipt; error?: string };
       if (!resp.ok || !body.acceptance) {
-        return this._mcpError(call.id, ERR_UNAUTHORIZED, body.error ?? "Proxy B rejected intent");
+        return this._mcpError(call.id, ERR_UNAUTHORIZED, body.error ?? "Proxy B rejected intent", { traceId: intentEnv.trace_id });
       }
       acceptance = body.acceptance;
     } catch (err) {
@@ -188,8 +188,8 @@ export class ProxyAGateway {
     };
   }
 
-  private _mcpError(id: string | number, code: number, message: string): McpToolResult {
-    return { jsonrpc: "2.0", id, error: { code, message } };
+  private _mcpError(id: string | number, code: number, message: string, data?: unknown): McpToolResult {
+    return { jsonrpc: "2.0", id, error: { code, message, data } };
   }
 }
 
