@@ -13,7 +13,7 @@ class SQLiteRepository:
     """
 
     def __init__(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path)
+        self._conn = sqlite3.connect(db_path, timeout=10)
         self._conn.row_factory = sqlite3.Row
         self._init_anchor_schema()
 
@@ -86,15 +86,6 @@ class SQLiteRepository:
         self._conn.executemany(
             "INSERT OR IGNORE INTO anchor_leaves (batch_id, leaf_index, envelope_id, leaf_hash, proof_path) VALUES (?,?,?,?,?)",
             rows,
-        )
-        self._conn.commit()
-
-    def update_ledger_chain(self, trace_id: str, on_chain_tx_id: str) -> None:
-        """Store on-chain tx reference in ledger_chain table."""
-        self._conn.execute(
-            """UPDATE ledger_chain SET on_chain_tx_id = ?
-               WHERE trace_id = ? AND on_chain_tx_id IS NULL""",
-            (on_chain_tx_id, trace_id),
         )
         self._conn.commit()
 

@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 let db: Database.Database;
 
 export function initDb(path: string): void {
-  db = new Database(path);
+  db = new Database(path, { timeout: 5000 });
   db.exec(`
     CREATE TABLE IF NOT EXISTS envelopes (
       id TEXT PRIMARY KEY,
@@ -11,25 +11,6 @@ export function initDb(path: string): void {
       trace_id TEXT NOT NULL,
       raw_payload TEXT NOT NULL,
       signature TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS ledger_chain (
-      sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      trace_id TEXT NOT NULL,
-      prev_hash TEXT,
-      node_hash TEXT NOT NULL,
-      timestamp TEXT NOT NULL,
-      on_chain_tx_id TEXT
-    );
-    CREATE TABLE IF NOT EXISTS risk_budgets (
-      entity_did TEXT PRIMARY KEY,
-      max_limit REAL NOT NULL,
-      current_spend REAL NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS provenance (
-      content_hash TEXT PRIMARY KEY,
-      tx_id TEXT NOT NULL,
-      receipt_sig TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS anchors (
@@ -49,12 +30,6 @@ export function initDb(path: string): void {
       PRIMARY KEY (batch_id, leaf_index)
     );
   `);
-  
-  try {
-    db.exec("ALTER TABLE ledger_chain ADD COLUMN on_chain_tx_id TEXT;");
-  } catch (err) {
-    // Column might already exist
-  }
 }
 
 export function saveEnvelope(
@@ -75,38 +50,6 @@ export function getEnvelopes(): unknown[] {
 
 export function getEnvelopesByTraceId(traceId: string): unknown[] {
   return db.prepare("SELECT * FROM envelopes WHERE trace_id = ? ORDER BY created_at ASC").all(traceId);
-}
-
-export function saveAnchor(anchor: {
-  batchId: string;
-  merkleRoot: string;
-  txHash?: string;
-  blockNumber?: number;
-  status: string;
-}): void {
-  db.prepare(
-    `INSERT OR REPLACE INTO anchors (batch_id, merkle_root, tx_hash, block_number, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(
-    anchor.batchId,
-    anchor.merkleRoot,
-    anchor.txHash ?? null,
-    anchor.blockNumber ?? null,
-    anchor.status,
-    new Date().toISOString()
-  );
-}
-
-export function saveAnchorLeaves(
-  batchId: string,
-  leaves: Array<{ leafIndex: number; envelopeId: string; leafHash: string; proofPath: string }>
-): void {
-  const stmt = db.prepare(
-    "INSERT OR IGNORE INTO anchor_leaves (batch_id, leaf_index, envelope_id, leaf_hash, proof_path) VALUES (?, ?, ?, ?, ?)"
-  );
-  for (const leaf of leaves) {
-    stmt.run(batchId, leaf.leafIndex, leaf.envelopeId, leaf.leafHash, leaf.proofPath);
-  }
 }
 
 export interface AnchorRow {
@@ -186,8 +129,7 @@ export function getDisputePackByTraceId(traceId: string) {
     records: envelopes.map(e => ({
       trace_id: e.trace_id,
       event_type: e.type + "_RECORD",
-      entry_id: 0, // Not stored in SQLite currently
-      entry_hash: e.id, // Using envelope ID as proxy for hash if not available
+      entry_hash: e.id,
       timestamp: e.created_at
     })),
     entries: envelopes.map(e => ({
@@ -202,7 +144,6 @@ export function getDisputePackByTraceId(traceId: string) {
 
 export function clearEnvelopes(): void {
   db.exec("DELETE FROM envelopes");
-  db.exec("DELETE FROM provenance");
   db.exec("DELETE FROM anchors");
   db.exec("DELETE FROM anchor_leaves");
 }

@@ -159,33 +159,19 @@ Both proxy servers wrap `@trustagentai/a2a-core` (located in `trust-agent/`). Th
 
 ---
 
-## SQLite Schema (identical on both nodes)
+## SQLite Schema
+
+The SQLite database configuration includes a `timeout: 5000` setting to ensure stability under concurrent load (SQLITE_BUSY retries).
 
 ```sql
--- Stores all signed cryptographic artifacts
+-- Stores all signed cryptographic artifacts (Bank-A & Bank-B)
 envelopes (
   id TEXT PRIMARY KEY,          -- <trace_id>:<type> e.g. "urn:uuid:...:intent"
   type TEXT NOT NULL,           -- INTENT | ACCEPTANCE | EXECUTION | PROVENANCE | DENIED
   trace_id TEXT NOT NULL,       -- urn:uuid:... links the 3-phase set
-  raw_payload TEXT NOT NULL,    -- JSON.stringify of the full envelope object
-  signature TEXT NOT NULL,      -- JSON.stringify of signatures array (real Ed25519 sig, including for DENIED)
+  raw_payload TEXT NOT NULL,    -- JCS (RFC 8785) representation of the full envelope object
+  signature TEXT NOT NULL,      -- JSON.stringify of signatures array
   created_at TEXT NOT NULL
-);
-
--- Hash-linked call graph (populated from DAGLedger on bank-b)
-ledger_chain (
-  sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  trace_id TEXT NOT NULL,
-  prev_hash TEXT,               -- NULL for first entry
-  node_hash TEXT NOT NULL,      -- SHA256(JCS(entry))
-  timestamp TEXT NOT NULL
-);
-
--- Real-time D4 budget state
-risk_budgets (
-  entity_did TEXT PRIMARY KEY,
-  max_limit REAL NOT NULL,
-  current_spend REAL NOT NULL DEFAULT 0
 );
 
 -- v0.5 content provenance (bank-a only)
