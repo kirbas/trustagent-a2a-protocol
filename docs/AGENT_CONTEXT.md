@@ -86,12 +86,17 @@ Trust-Agent/
 │   │   ├── App.tsx                3-column grid; owns resetToken state + onReset callback
 │   │   ├── types.ts               ThoughtEvent, HandshakeEvent, Envelope, DisputePack, AnchorEvent
 │   │   ├── hooks/
-│   │   │   ├── useSSE.ts          EventSource wrapper; resetToken param clears state on change
+│   │   │   ├── useSSEMulti.ts      Multi-event source wrapper
 │   │   │   └── useEnvelopes.ts    polls /envelopes every 3s; resetToken param clears + re-fetches
 │   │   └── components/
-│   │       ├── ThoughtStream.tsx  merged Bank-A + Bank-B thoughts, auto-scroll; { resetToken }
-│   │       ├── HandshakeVisualizer.tsx  trace timelines; Start Demo / Clear+restart buttons; { resetToken, onReset }
-│   │       └── DisputeConsole.tsx  Envelopes, Dispute Pack, Anchor to L2, Verify Anchor, Cross-Check tabs.
+│   │       ├── ErrorBoundary.tsx  React class error boundary for offline panels
+│   │       ├── ThoughtStream.tsx  merged Bank-A + Bank-B thoughts + Protocol mode
+│   │       ├── HandshakeTutorial.tsx 3-phase protocol zero-state guide
+│   │       ├── HandshakeVisualizer.tsx trace timelines; Start Demo / Clear+restart buttons
+│   │       └── DisputeConsole.tsx Envelopes, Dispute Pack, Anchor to L2, Verify Anchor, Provenance Verifier, Cross-Check
+│   │           ├── EvidenceBundle.tsx [INTENT] → [ACCEPTANCE] → [EXECUTION] causal chain
+│   │           ├── ForensicDetail.tsx Syntax-highlighted JSON viewer with proofs
+│   │           └── ProvenanceVerifier.tsx Native browser drag-drop SHA-256 verification
 │   ├── package.json               React 18, Vite 5, TypeScript
 │   ├── tsconfig.json              bundler moduleResolution, vite/client types
 │   ├── vite.config.ts

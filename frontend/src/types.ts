@@ -23,10 +23,35 @@ export interface Envelope {
   created_at: string;
 }
 
+export interface DisputeRecord {
+  trace_id: string;
+  event_type: string;
+  entry_hash: string;
+  timestamp: string;
+}
+
+export interface DisputeEntry {
+  trace_id: string;
+  event_type: string;
+  artifact: Record<string, unknown>;
+  entry_hash: string;
+}
+
+export interface InclusionProof {
+  entry_hash: string;
+  proof: Array<{ hash: string; position: string }>;
+  batch: {
+    batch_id: string;
+    merkle_root: string;
+    anchored_at: string;
+    created_at: string;
+  };
+}
+
 export interface DisputePack {
-  records: unknown[];
-  entries: unknown[];
-  inclusionProofs: unknown[];
+  records: DisputeRecord[];
+  entries: DisputeEntry[];
+  inclusionProofs: InclusionProof[];
 }
 
 export interface AnchorEvent {

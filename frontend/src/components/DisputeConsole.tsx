@@ -1,6 +1,9 @@
 import { useState, useMemo, useEffect } from "react";
 import { useEnvelopes } from "../hooks/useEnvelopes";
 import type { Envelope, DisputePack } from "../types";
+import { HandshakeTutorial } from "./HandshakeTutorial";
+import { ForensicDetail } from "./ForensicDetail";
+import { EvidenceBundle } from "./EvidenceBundle";
 
 const PROXY_A = import.meta.env.VITE_PROXY_A_URL ?? "http://localhost:3001";
 const PROXY_B = import.meta.env.VITE_PROXY_B_URL ?? "http://localhost:3002";
@@ -48,6 +51,36 @@ function EnvelopeRow({ env }: { env: Envelope }) {
           {pretty}
         </pre>
       )}
+    </div>
+  );
+}
+
+// ── Dispute pack detail (Evidence Chain + Forensic Detail tabs) ────────────
+
+function DisputePackDetail({ pack }: { pack: DisputePack }) {
+  const [view, setView] = useState<"chain" | "forensic">("chain");
+
+  const miniTab = (label: string, active: boolean, onClick: () => void) => (
+    <button onClick={onClick} style={{
+      padding: "2px 8px", background: active ? "#0d1a2a" : "transparent",
+      border: `1px solid ${active ? "#7bb3ff55" : "#222"}`,
+      borderRadius: 2, color: active ? "#7bb3ff" : "#444",
+      cursor: "pointer", fontFamily: "inherit", fontSize: 9,
+    }}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ display: "flex", gap: 4, padding: "4px 0 6px" }}>
+        {miniTab("Evidence Chain", view === "chain", () => setView("chain"))}
+        {miniTab("Forensic Detail", view === "forensic", () => setView("forensic"))}
+      </div>
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {view === "chain" && <EvidenceBundle entries={pack.entries} />}
+        {view === "forensic" && <ForensicDetail pack={pack} />}
+      </div>
     </div>
   );
 }
@@ -154,15 +187,7 @@ function DisputePackView({ proxyBUrl, resetToken }: { proxyBUrl: string; resetTo
         </div>
       )}
       {loading && <div style={{ color: "#666", fontSize: 11 }}>Loading…</div>}
-      {pack && (
-        <pre style={{
-          flex: 1, fontSize: 10, background: "#0d0d0d", color: "#c0c0c0",
-          padding: 8, borderRadius: 4, border: "1px solid #222",
-          overflowY: "auto", lineHeight: 1.5, margin: 0,
-        }}>
-          {JSON.stringify(pack, null, 2)}
-        </pre>
-      )}
+      {pack && <DisputePackDetail pack={pack} />}
     </div>
   );
 }
@@ -280,6 +305,7 @@ function AnchorVerifyView() {
   const [input, setInput] = useState("");
   const [result, setResult] = useState<VerifyResult | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const verify = async () => {
@@ -288,12 +314,13 @@ function AnchorVerifyView() {
     setLoading(true);
     setResult(null);
     setNotFound(false);
+    setFetchError(null);
     try {
       const r = await fetch(`${PROXY_B}/verify/${encodeURIComponent(txHash)}`);
       if (r.status === 404) { setNotFound(true); return; }
       setResult(await r.json());
     } catch (err) {
-      alert("Verify failed: " + (err instanceof Error ? err.message : String(err)));
+      setFetchError(err instanceof Error ? err.message : String(err));
     } finally { setLoading(false); }
   };
 
@@ -380,6 +407,16 @@ function AnchorVerifyView() {
           </button>
         )}
       </div>
+
+      {fetchError && (
+        <div style={{
+          background: "#1a0000", border: "1px solid #3a1a1a", borderRadius: 6,
+          padding: "10px 12px", display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span style={{ color: "#f44336", fontSize: 16 }}>⚠</span>
+          <span style={{ color: "#f44336", fontSize: 11 }}>Node offline or request failed: {fetchError}</span>
+        </div>
+      )}
 
       {/* Not found */}
       {notFound && (
@@ -579,12 +616,12 @@ export function DisputeConsole({ resetToken = 0 }: { resetToken?: number }) {
       </div>
 
       {tab === "envelopes" && (
-        <>
-          <div style={{ flex: 1, overflowY: "auto", padding: "6px 10px" }}>
-            {envelopes.length === 0 && <div style={{ color: "#444", fontSize: 11 }}>No envelopes yet.</div>}
-            {envelopes.map((env) => <EnvelopeRow key={env.id} env={env} />)}
-          </div>
-        </>
+        <div style={{ flex: 1, overflowY: "auto", padding: "6px 10px" }}>
+          {envelopes.length === 0
+            ? <HandshakeTutorial />
+            : envelopes.map((env) => <EnvelopeRow key={env.id} env={env} />)
+          }
+        </div>
       )}
 
       {tab === "dispute" && (
