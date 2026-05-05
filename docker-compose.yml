@@ -1,0 +1,97 @@
+services:
+  bank-b-anchor:
+    build:
+      context: Bank-B/merkle-anchor
+      dockerfile: Dockerfile
+    container_name: bank-b-anchor
+    ports:
+      - "5001:5001"
+    environment:
+      RPC_URL: "${RPC_URL}"
+      PRIVATE_KEY: "${PRIVATE_KEY}"
+      DB_PATH: "/data/bank-b.db"
+    volumes:
+      - bank-b-data:/data
+
+  bank-b-proxy:
+    build:
+      context: .
+      dockerfile: Bank-B/proxy/Dockerfile
+    container_name: bank-b-proxy
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: "3002"
+      DB_PATH: "/data/bank-b.db"
+      FRONTEND_ORIGIN: "http://localhost:3000"
+      ANCHOR_URL: "http://bank-b-anchor:5001"
+    volumes:
+      - bank-b-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3002/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+
+  bank-a-proxy:
+    build:
+      context: .
+      dockerfile: Bank-A/proxy/Dockerfile
+    container_name: bank-a-proxy
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: "3001"
+      PROXY_B_URL: "http://bank-b-proxy:3002"
+      DB_PATH: "/data/bank-a.db"
+      FRONTEND_ORIGIN: "http://localhost:3000"
+    volumes:
+      - bank-a-data:/data
+    depends_on:
+      bank-b-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+
+  bank-a-agent:
+    build:
+      context: Bank-A/agent
+      dockerfile: Dockerfile
+    container_name: bank-a-agent
+    environment:
+      PROXY_A_URL: "http://bank-a-proxy:3001"
+      PROXY_B_URL: "http://bank-b-proxy:3002"
+    depends_on:
+      bank-a-proxy:
+        condition: service_healthy
+
+  bank-b-agent:
+    build:
+      context: Bank-B/agent
+      dockerfile: Dockerfile
+    container_name: bank-b-agent
+    environment:
+      PROXY_B_URL: "http://bank-b-proxy:3002"
+    depends_on:
+      bank-b-proxy:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - bank-a-proxy
+      - bank-b-proxy
+
+volumes:
+  bank-a-data:
+  bank-b-data:
