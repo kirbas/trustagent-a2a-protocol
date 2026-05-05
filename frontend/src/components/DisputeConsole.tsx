@@ -126,6 +126,14 @@ function DisputePackView({ proxyBUrl, resetToken }: { proxyBUrl: string; resetTo
 
 // ── Anchor verification panel ───────────────────────────────────────────────
 
+const ENVELOPE_ORIGIN: Record<string, { label: string; bank: string; color: string }> = {
+  INTENT:     { label: "INTENT",     bank: "A→B", color: "#7bb3ff" },
+  ACCEPTANCE: { label: "ACCEPTED",   bank: "B",   color: "#4caf50" },
+  DENIED:     { label: "REJECTED",   bank: "B",   color: "#f44336" },
+  EXECUTION:  { label: "EXECUTED",   bank: "A+B", color: "#a78bfa" },
+  PROVENANCE: { label: "PROVENANCE", bank: "A",   color: "#f0a500" },
+};
+
 interface VerifyLeaf {
   leafIndex: number;
   envelopeId: string;
@@ -134,6 +142,7 @@ interface VerifyLeaf {
   leafHash: string;
   proofPath: Array<{ hash: string; position: string }>;
   proofValid: boolean;
+  payload?: unknown;
 }
 
 interface VerifyResult {
@@ -149,39 +158,76 @@ interface VerifyResult {
   leaves: VerifyLeaf[];
 }
 
-function LeafRow({ leaf }: { leaf: VerifyResult["leaves"][0] }) {
-  const [localExpanded, setLocalExpanded] = useState(false);
-  const typeColor = TYPE_COLOR[leaf.envelopeType ?? ""] ?? "#666";
+function TraceFlow({ traceId, leaves }: { traceId: string; leaves: VerifyLeaf[] }) {
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const isRejected = leaves.some((l) => l.envelopeType === "DENIED");
+  const allValid = leaves.every((l) => l.proofValid);
+  const shortId = traceId.replace(/^urn:uuid:/, "").slice(-12);
+
   return (
     <div style={{
-      background: "#0d0d0d", borderRadius: 4, 
-      border: `1px solid ${leaf.proofValid ? "#1a3a1a" : "#3a1a1a"}`,
-      marginBottom: 4, overflow: "hidden"
+      background: "#0d0d0d", borderRadius: 6,
+      border: `1px solid ${isRejected ? "#3a1a1a" : allValid ? "#1a3a1a" : "#333"}`,
+      marginBottom: 8, overflow: "hidden",
     }}>
-      <div 
-        onClick={() => setLocalExpanded(!localExpanded)}
-        style={{
-          padding: "7px 10px", display: "grid", gridTemplateColumns: "18px 80px 1fr auto 20px",
-          gap: "0 8px", alignItems: "center", fontSize: 10, cursor: "pointer"
-        }}
-      >
-        <span style={{ color: "#444" }}>#{leaf.leafIndex}</span>
-        <span style={{ color: typeColor, fontWeight: "bold" }}>{leaf.envelopeType ?? "—"}</span>
-        <span style={{ color: "#555" }}>
-          {(leaf.traceId || leaf.envelopeId).replace(/^urn:uuid:/, "")}
+      {/* Trace header */}
+      <div style={{
+        padding: "6px 10px", display: "flex", alignItems: "center", gap: 8,
+        borderBottom: "1px solid #1a1a1a", background: "#0a0a0a",
+      }}>
+        <span style={{ color: "#444", fontSize: 9 }}>TRACE</span>
+        <span style={{ color: "#666", fontFamily: "monospace", fontSize: 10 }}>…{shortId}</span>
+        <span style={{ marginLeft: "auto", fontSize: 9, fontWeight: "bold",
+          color: isRejected ? "#f44336" : "#4caf50" }}>
+          {isRejected ? "REJECTED" : "ACCEPTED"}
         </span>
-        <span style={{ color: leaf.proofValid ? "#4caf50" : "#f44336", fontWeight: "bold" }}>
-          {leaf.proofValid ? "✓" : "✗"}
+        <span style={{ fontSize: 9, color: allValid ? "#4caf50" : "#f44336" }}>
+          {allValid ? "✓ proofs valid" : "✗ proof failure"}
         </span>
-        <span style={{ color: "#444" }}>{localExpanded ? "▲" : "▼"}</span>
       </div>
-      {localExpanded && (
-        <pre style={{
-          fontSize: 9, padding: 8, background: "#050505", color: "#888",
-          margin: 0, borderTop: "1px solid #1a1a1a", overflowX: "auto"
-        }}>
-          {JSON.stringify((leaf as any).payload, null, 2)}
-        </pre>
+
+      {/* Flow pills */}
+      <div style={{ padding: "8px 10px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+        {leaves.map((leaf, i) => {
+          const origin = ENVELOPE_ORIGIN[leaf.envelopeType ?? ""] ??
+            { label: leaf.envelopeType ?? "?", bank: "?", color: "#666" };
+          const isExpanded = expandedIdx === i;
+          return (
+            <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              {i > 0 && <span style={{ color: "#333", fontSize: 10 }}>→</span>}
+              <button
+                onClick={() => setExpandedIdx(isExpanded ? null : i)}
+                title={`Leaf #${leaf.leafIndex} — click to inspect payload`}
+                style={{
+                  padding: "3px 8px", borderRadius: 3, fontSize: 10, cursor: "pointer",
+                  fontFamily: "inherit", background: isExpanded ? "#1a1a2a" : "#0d0d0d",
+                  color: origin.color,
+                  border: `1px solid ${leaf.proofValid ? origin.color + "66" : "#f44336"}`,
+                }}
+              >
+                {origin.label} <span style={{ color: "#555", fontSize: 9 }}>({origin.bank})</span>
+                {" "}{leaf.proofValid ? "✓" : "✗"}
+              </button>
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Expanded payload */}
+      {expandedIdx !== null && leaves[expandedIdx] && (
+        <div style={{ borderTop: "1px solid #1a1a1a" }}>
+          <div style={{ padding: "4px 10px", background: "#050505", display: "flex", gap: 8,
+            fontSize: 9, color: "#444" }}>
+            <span>leaf #{leaves[expandedIdx].leafIndex}</span>
+            <span>hash: {leaves[expandedIdx].leafHash.slice(0, 16)}…</span>
+          </div>
+          <pre style={{
+            fontSize: 9, padding: "6px 10px", background: "#050505", color: "#888",
+            margin: 0, overflowX: "auto", maxHeight: 220, overflowY: "auto", lineHeight: 1.5,
+          }}>
+            {JSON.stringify(leaves[expandedIdx].payload ?? "(no payload)", null, 2)}
+          </pre>
+        </div>
       )}
     </div>
   );
@@ -202,26 +248,59 @@ function AnchorVerifyView() {
     try {
       const r = await fetch(`${PROXY_B}/verify/${encodeURIComponent(txHash)}`);
       if (r.status === 404) { setNotFound(true); return; }
-      const data = await r.json();
-      setResult(data);
+      setResult(await r.json());
     } catch (err) {
-      console.error("Verify failed:", err);
       alert("Verify failed: " + (err instanceof Error ? err.message : String(err)));
     } finally { setLoading(false); }
   };
 
+  const traceGroups = useMemo<Map<string, VerifyLeaf[]>>(() => {
+    const map = new Map<string, VerifyLeaf[]>();
+    if (!result) return map;
+    for (const leaf of result.leaves) {
+      const key = leaf.traceId ?? `leaf-${leaf.leafIndex}`;
+      const arr = map.get(key) ?? [];
+      arr.push(leaf);
+      map.set(key, arr);
+    }
+    return map;
+  }, [result]);
+
   const download = () => {
     if (!result) return;
-    const filename = `${result.txHash}.json`;
-    const blob = new Blob([JSON.stringify(result, null, 2)], { type: "application/json" });
+    // Build structured dispute pack
+    const pack = {
+      anchor: {
+        txHash: result.txHash,
+        blockNumber: result.blockNumber,
+        merkleRoot: result.merkleRoot,
+        basescanUrl: result.basescanUrl,
+        anchoredAt: result.anchoredAt,
+        allProofsValid: result.allValid,
+      },
+      traces: [...traceGroups.entries()].map(([traceId, leaves]) => ({
+        traceId: traceId.replace(/^urn:uuid:/, ""),
+        status: leaves.some((l) => l.envelopeType === "DENIED") ? "REJECTED" : "ACCEPTED",
+        agentFlow: leaves.map((l) => {
+          const origin = ENVELOPE_ORIGIN[l.envelopeType ?? ""];
+          return {
+            step: origin ? `${origin.label} (${origin.bank})` : l.envelopeType,
+            leafIndex: l.leafIndex,
+            proofValid: l.proofValid,
+            leafHash: l.leafHash,
+            payload: l.payload,
+          };
+        }),
+      })),
+    };
+    const blob = new Blob([JSON.stringify(pack, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = filename; a.click();
+    a.href = url; a.download = `${result.txHash}.json`; a.click();
     URL.revokeObjectURL(url);
   };
 
   const statusColor = result ? (result.allValid ? "#4caf50" : "#f44336") : notFound ? "#f44336" : "#333";
-  const statusBorder = result ? (result.allValid ? "#1a3a1a" : "#3a1a1a") : notFound ? "#3a1a1a" : "#222";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: "8px 10px", gap: 8 }}>
@@ -238,27 +317,23 @@ function AnchorVerifyView() {
             outline: "none", transition: "border-color 0.2s",
           }}
         />
-        <button
-          onClick={verify}
-          disabled={!input.trim() || loading}
+        <button onClick={verify} disabled={!input.trim() || loading}
           style={{
             padding: "4px 12px", background: "#1a2a3a", border: "1px solid #7bb3ff",
             borderRadius: 3, color: "#7bb3ff", cursor: "pointer", fontFamily: "inherit", fontSize: 11,
             opacity: !input.trim() || loading ? 0.5 : 1,
-          }}
-        >
+          }}>
           {loading ? "…" : "Verify"}
         </button>
         {result && (
-          <button
-            onClick={download}
+          <button onClick={download}
             style={{
               padding: "4px 10px", background: "#1a2a1a", border: "1px solid #4caf50",
               borderRadius: 3, color: "#4caf50", cursor: "pointer", fontFamily: "inherit", fontSize: 11,
+              whiteSpace: "nowrap",
             }}
-            title={`Download ${result.txHash}.json`}
-          >
-            ↓ JSON
+            title={`Download ${result.txHash}.json`}>
+            ↓ {result.txHash.slice(0, 10)}….json
           </button>
         )}
       </div>
@@ -270,9 +345,7 @@ function AnchorVerifyView() {
           padding: "10px 12px", display: "flex", alignItems: "center", gap: 8,
         }}>
           <span style={{ color: "#f44336", fontSize: 16 }}>✗</span>
-          <span style={{ color: "#f44336", fontSize: 11 }}>
-            Transaction not found in local anchor database.
-          </span>
+          <span style={{ color: "#f44336", fontSize: 11 }}>Transaction not found in anchor database.</span>
         </div>
       )}
 
@@ -286,9 +359,7 @@ function AnchorVerifyView() {
             borderRadius: 6, padding: "10px 12px",
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <span style={{ color: "#f0a500", fontSize: 11, fontWeight: "bold", letterSpacing: 1 }}>
-                ⛓ MERKLE ANCHOR
-              </span>
+              <span style={{ color: "#f0a500", fontSize: 11, fontWeight: "bold", letterSpacing: 1 }}>⛓ MERKLE ANCHOR</span>
               <span style={{ color: result.allValid ? "#4caf50" : "#f44336", fontSize: 11, fontWeight: "bold" }}>
                 {result.allValid ? "✓ ALL PROOFS VALID" : "✗ PROOF FAILURE"}
               </span>
@@ -296,18 +367,12 @@ function AnchorVerifyView() {
             <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 10px", fontSize: 10 }}>
               <span style={{ color: "#555" }}>Block</span>
               <span style={{ color: "#ccc" }}>{result.blockNumber}</span>
-
               <span style={{ color: "#555" }}>Root</span>
-              <span style={{ color: "#888", fontFamily: "monospace", wordBreak: "break-all" }}>
-                {result.merkleRoot}
-              </span>
-
+              <span style={{ color: "#888", fontFamily: "monospace", wordBreak: "break-all" }}>{result.merkleRoot}</span>
               <span style={{ color: "#555" }}>Leaves</span>
-              <span style={{ color: "#ccc" }}>{result.leafCount}</span>
-
+              <span style={{ color: "#ccc" }}>{result.leafCount} envelopes across {traceGroups.size} trace(s)</span>
               <span style={{ color: "#555" }}>Anchored</span>
               <span style={{ color: "#ccc" }}>{new Date(result.anchoredAt).toLocaleString()}</span>
-
               <span style={{ color: "#555" }}>Tx</span>
               <a href={result.basescanUrl} target="_blank" rel="noreferrer"
                 style={{ color: "#f0a500", textDecoration: "none", wordBreak: "break-all" }}>
@@ -316,25 +381,13 @@ function AnchorVerifyView() {
             </div>
           </div>
 
-          {/* Leaf table */}
+          {/* Agent communication flows grouped by trace */}
           <div style={{ color: "#555", fontSize: 10, paddingLeft: 2 }}>
-            Merkle leaves — proofs re-derived and verified against on-chain root:
+            Agent communication flow — click any envelope to inspect payload:
           </div>
-          {result.leaves.map((leaf) => (
-            <LeafRow key={leaf.leafIndex} leaf={leaf} />
+          {[...traceGroups.entries()].map(([traceId, leaves]) => (
+            <TraceFlow key={traceId} traceId={traceId} leaves={leaves} />
           ))}
-
-          {/* Full JSON */}
-          <div style={{ color: "#555", fontSize: 10, paddingLeft: 2, marginTop: 4 }}>
-            Full dispute pack JSON:
-          </div>
-          <pre style={{
-            fontSize: 10, background: "#0d0d0d", color: "#c0c0c0",
-            padding: 10, borderRadius: 4, border: `1px solid ${statusBorder}`,
-            overflowY: "auto", lineHeight: 1.5, margin: 0, maxHeight: 320,
-          }}>
-            {JSON.stringify(result, null, 2)}
-          </pre>
         </div>
       )}
     </div>

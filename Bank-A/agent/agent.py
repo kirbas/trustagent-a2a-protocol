@@ -5,6 +5,7 @@ import json
 import requests
 
 PROXY_URL = os.environ.get("PROXY_A_URL", "http://localhost:3001")
+PROXY_B_URL = os.environ.get("PROXY_B_URL", "http://localhost:3002")
 
 
 def wait_for_proxy():
@@ -47,6 +48,14 @@ def signal_done():
         requests.post(f"{PROXY_URL}/trigger-done", timeout=5)
     except Exception:
         pass
+
+
+def signal_anchor():
+    try:
+        requests.post(f"{PROXY_B_URL}/anchor-now", timeout=60)
+        print("[bank-a-agent] anchor signal sent to Bank-B")
+    except Exception as e:
+        print(f"[bank-a-agent] anchor signal failed: {e}")
 
 
 def invoke(tool: str, args: dict, cost: float) -> dict:
@@ -102,11 +111,13 @@ if __name__ == "__main__":
 
         print("[bank-a-agent] === Scenario 1: Successful $5k procurement ===")
         scenario_success()
+        signal_anchor()
 
         time.sleep(3)
 
         print("[bank-a-agent] === Scenario 2: Breach attempt $50k ===")
         scenario_breach()
+        signal_anchor()
 
         signal_done()
         print("[bank-a-agent] Demo complete. Waiting for next trigger...")

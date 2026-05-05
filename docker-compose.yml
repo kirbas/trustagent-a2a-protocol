@@ -65,6 +65,7 @@ services:
     container_name: bank-a-agent
     environment:
       PROXY_A_URL: "http://bank-a-proxy:3001"
+      PROXY_B_URL: "http://bank-b-proxy:3002"
     depends_on:
       bank-a-proxy:
         condition: service_healthy

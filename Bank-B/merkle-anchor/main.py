@@ -20,27 +20,39 @@ def _require_env(key: str) -> str:
     return value
 
 
+import threading
+
+_anchor_lock = threading.Lock()
+
 @app.route('/anchor', methods=['POST'])
 def trigger_anchor():
-    rpc_url = _require_env("RPC_URL")
-    private_key = _require_env("PRIVATE_KEY")
-    db_path = os.getenv("DB_PATH", "/data/bank-b.db")
+    if not _anchor_lock.acquire(blocking=False):
+        return jsonify({"status": "noop", "message": "Anchor already in progress"}), 200
 
+    rpc_url = os.getenv("RPC_URL")
+    private_key = os.getenv("PRIVATE_KEY")
+    if not rpc_url or not private_key:
+        _anchor_lock.release()
+        return jsonify({"error": "RPC_URL and PRIVATE_KEY must be set"}), 500
+
+    db_path = os.getenv("DB_PATH", "/data/bank-b.db")
     db = SQLiteRepository(db_path)
     notary = BlockchainNotary(rpc_url=rpc_url, private_key=private_key)
 
     if not notary.is_connected:
         db.close()
+        _anchor_lock.release()
         return jsonify({"error": f"Cannot connect to RPC at {rpc_url}"}), 500
 
-    agent = AccountingAgent(db=db, notary=notary)
     try:
+        agent = AccountingAgent(db=db, notary=notary)
         result = agent.anchor_pending_envelopes()
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
         db.close()
+        _anchor_lock.release()
 
 
 if __name__ == "__main__":

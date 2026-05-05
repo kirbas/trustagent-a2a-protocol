@@ -13,7 +13,6 @@ import {
   getEnvelopes,
   saveProvenance,
   clearEnvelopes,
-  getRecentEnvelopeData,
   getEnvelopesByTraceId,
 } from "./db.js";
 import { SseBus } from "./sse.js";
@@ -78,7 +77,7 @@ async function main(): Promise<void> {
     res.json({ ok: true });
   });
 
-  app.get("/events", (req, res) => sseBus.addClient(res));
+  app.get("/events", (_req, res) => sseBus.addClient(res));
 
   app.get("/envelopes", (_req, res) => res.json(getEnvelopes()));
 
@@ -158,11 +157,19 @@ async function main(): Promise<void> {
       },
     };
 
-    const mcpResult = await proxyA.forwardToolCall(call, async () => ({
+    const executor = async () => ({
       result: "Security Report PDF — TrustAgentAI v0.5 Provenance-Linked",
       generated_at: new Date().toISOString(),
       report_id: randomUUID(),
-    }));
+    });
+
+    let mcpResult = await proxyA.forwardToolCall(call, executor);
+
+    if (mcpResult.error && String(mcpResult.error).includes("Unknown key")) {
+      console.log("[bank-a-proxy] key not recognized by Proxy B — re-registering and retrying");
+      await registerWithProxyB(PROXY_B_URL, PROXY_KID, publicKeyHex);
+      mcpResult = await proxyA.forwardToolCall(call, executor);
+    }
 
     const ts = new Date().toISOString();
 
@@ -177,6 +184,9 @@ async function main(): Promise<void> {
     saveEnvelope(intent.trace_id + ":intent", "INTENT", intent.trace_id, intent, JSON.stringify(intent.signatures));
     saveEnvelope(acceptance.trace_id + ":acceptance", "ACCEPTANCE", acceptance.trace_id, acceptance, JSON.stringify(acceptance.signatures));
     saveEnvelope(execution.trace_id + ":execution", "EXECUTION", execution.trace_id, execution, JSON.stringify(execution.signatures));
+
+    sseBus.broadcast("envelope", { type: "INTENT", traceId: intent.trace_id, tool, ts });
+    sseBus.broadcast("envelope", { type: "ACCEPTANCE", traceId: acceptance.trace_id, ts });
 
     sseBus.broadcast("execution-complete", {
       traceId: execution.trace_id,
