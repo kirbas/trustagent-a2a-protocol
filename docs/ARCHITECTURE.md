@@ -275,9 +275,10 @@ data: {"traceId":"urn:uuid:...","tool":"get_security_report","cost":5000,"ts":".
 ```
 App.tsx  (3-column grid layout, owns resetToken state)
 ├── ThoughtStream.tsx  { resetToken }
-│   ├── useSSE(PROXY_A/events, "thought", resetToken)
-│   └── useSSE(PROXY_B/events, "thought", resetToken)
-│       → merged, sorted by ts, auto-scroll
+│   ├── useSSEMulti(PROXY_A/events, ["thought", "envelope", ...], resetToken)
+│   ├── useSSEMulti(PROXY_B/events, ["thought", "intent-accepted", ...], resetToken)
+│   ├── Mode: "Thoughts" → interleaved agent reasoning
+│   └── Mode: "Protocol" → live A2A envelope traffic (terminal-style log)
 │
 ├── HandshakeVisualizer.tsx  { resetToken, onReset }
 │   ├── useSSE(PROXY_A/events, "demo-triggered",    resetToken)
@@ -286,6 +287,8 @@ App.tsx  (3-column grid layout, owns resetToken state)
 │   ├── useSSE(PROXY_B/events, "intent-rejected",   resetToken)
 │   ├── useSSE(PROXY_B/events, "anchor-pending",    resetToken)
 │   ├── useSSE(PROXY_B/events, "anchor-complete",   resetToken)
+│   ├── zero-state: HandshakeTutorial (explains 3-phase protocol flow)
+│   ├── wrap: ErrorBoundary (shows "Node Offline" banner on failure)
 │       → per-trace "ANCHORING ⏳" step → replaced by "ANCHORED ⛓ block N ↗" (BaseScan link)
 │       → bilateral execution confirmation: "EXECUTED (A) ✓" and "EXECUTED (B) ✓"
 │       → border color logic: Red (Denied) > Orange (Anchored) > Green (Success)
@@ -306,8 +309,12 @@ App.tsx  (3-column grid layout, owns resetToken state)
     │       → DENIED rows highlighted red
     ├── tab: Dispute Pack
     │   ├── trace selector (populated from useEnvelopes; clears on resetToken change)
+    │   ├── filter: fast-filter trace IDs
     │   ├── Load  → GET PROXY_B/dispute/:traceId
-    │   └── Flush + Load  → POST PROXY_B/flush → GET /dispute/:traceId
+    │   ├── Flush + Load  → POST PROXY_B/flush → GET /dispute/:traceId
+    │   └── View: DisputePackDetail
+    │       ├── EvidenceBundle → [INTENT] → [ACCEPTANCE] → [EXECUTION] causal chain
+    │       └── ForensicDetail → Collapsible, syntax-highlighted JSON viewer
     ├── tab: Anchor to L2
     │   └── Anchor to L2 → POST PROXY_B/anchor
     ├── tab: Verify Anchor
@@ -315,8 +322,10 @@ App.tsx  (3-column grid layout, owns resetToken state)
     │   ├── Verify → GET PROXY_B/verify/:txHash
     │   │   → green banner if found + allValid, red if not found or proof failure
     │   │   → leaf table: index / type / traceId snippet / ✓ or ✗ per leaf
-    │   │   → full dispute pack JSON expanded inline
+    │   │   → full dispute pack JSON expanded inline via ForensicDetail
     │   └── ↓ JSON button → downloads {txHash}.json
+    ├── tab: Provenance Verifier
+    │   └── Drag-drop file zone → native browser SHA-256 → match content_hash
     └── tab: Cross-Check
         ├── trace selector
         ├── Cross-Check → POST PROXY_A/cross-check

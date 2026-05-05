@@ -60,37 +60,37 @@ Docker builds from scratch take ~4 minutes (compiling native `better-sqlite3`). 
 ## Frontend Panels
 
 ### Agent Thought Stream (left)
-Live interleaved thought logs from both agents, color-coded by node (green = Bank-A, orange = Bank-B). The agent logic is **reasoning-forward**: surfacing internal verifications and cryptographic expectations rather than just narrating actions. Auto-scrolls to bottom.
+Live interleaved thought logs from both agents, color-coded by node (green = Bank-A, orange = Bank-B). The agent logic is **reasoning-forward**: surfacing internal verifications and cryptographic expectations.
+- **Protocol Toggle**: Switch to "Protocol" mode to view a live, terminal-style log of raw A2A envelope traffic (Intent, Acceptance, Execution) with timing and trace IDs.
 
 ### Bilateral Handshake (centre)
-Step timeline per `trace_id`. Each trace shows its steps as badges:
-- `INTENT → PROXY-B` → `ACCEPTED ✓` → `EXECUTED (A) ✓` → `EXECUTED (B) ✓` → `PROVENANCE ✓` (green, success)
-- `INTENT → PROXY-B` → `REJECTED — reason` (red, denied)
-All trace IDs are displayed as clean UUIDs (no `urn:uuid:` prefix). Panels are perfectly aligned with standardized 84px headers.
-
-Click **▶ Start Demo** to trigger `bank-a-agent`. Once both scenarios have completed, the button changes to **↺ Clear messages and restart demo** — clicking it resets both proxies and all frontend state so the demo can run again.
+Step timeline per `trace_id`. 
+- **Zero State**: Shows the **Handshake Tutorial**, a visual guide explaining the 3-phase A2A protocol (Intent → Acceptance → Execution).
+- **Error Boundaries**: If a node goes offline, the panel displays a "Node Offline" warning instead of crashing.
+- **Handshake badges**: `INTENT` → `ACCEPTED` → `EXECUTED (A/B)` → `PROVENANCE`.
+- All trace IDs are clean UUIDs. Panels are perfectly aligned with 84px headers.
 
 ### Dispute Console (right)
-Two sub-tabs:
+Multiple specialized tabs for forensic audit:
 
-**Envelopes tab** — polls `/envelopes` every 3 s on both proxies. Click any row to expand its raw JSON payload. `DENIED` entries are highlighted red.
+**Envelopes tab** — polls `/envelopes` every 3 s. Click any row to expand its raw JSON.
 
-**Dispute Pack tab** — select a `trace_id`, then:
-- **Load** — fetches `GET bank-b-proxy:3002/dispute/<traceId>` and renders the full dispute pack JSON (records, entries, Merkle `inclusionProofs`)
-- **Flush + Load** — first calls `POST /flush` to force a Merkle batch commit, then loads the pack (needed for proofs when < 8 entries exist)
+**Dispute Pack tab** — select a `trace_id` to load its **Evidence Bundle**:
+- **Causal Chain**: Visualizes the cryptographic link from [INTENT] through [ACCEPTANCE] to [EXECUTION].
+- **Forensic Detail**: Syntax-highlighted, collapsible JSON viewer. Signature keys are amber, hashes purple, and protocol fields green.
+- **Flush + Load**: Forces a Merkle batch commit before loading proofs.
 
-**Anchor to L2 tab** — trigger Merkle notarization:
-- Click **Anchor to L2** to force Bank-B to anchor all pending receipts to the blockchain.
+**Anchor to L2 tab** — trigger Merkle notarization via `POST /anchor`.
 
 **Verify Anchor tab** — blockchain proof verification:
-- Paste any Base Sepolia tx hash → **Verify** calls `GET bank-b-proxy:3002/verify/<txHash>`
-- Green banner: anchor found, all Merkle inclusion proofs valid
-- Red banner: tx hash not in local database (or proof failure)
-- Leaf table shows each envelope in the batch with its proof validity (✓ / ✗)
-- Full dispute pack JSON displayed inline; **↓ JSON** button downloads `{txHash}.json`
+- Paste Base Sepolia tx hash → **Verify** calls `GET /verify/:txHash`.
+- Shows leaf-by-leaf validity (✓ / ✗) and full forensic JSON.
+
+**Provenance Verifier tab** — NEW:
+- Drag and drop a received file (e.g., the security report) to verify its integrity locally. The browser computes the SHA-256 hash and compares it against the anchored `content_hash` in the ledger.
 
 **Cross-Check tab** — bilateral integrity verification:
-- Select a `trace_id` → **Cross-Check** calls `POST bank-a-proxy:3001/cross-check` to ensure Bank-A and Bank-B possess identical execution envelopes.
+- Ensures Bank-A and Bank-B possess identical execution envelopes for a given trace.
 
 ---
 

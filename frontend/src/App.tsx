@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ThoughtStream } from "./components/ThoughtStream";
 import { HandshakeVisualizer } from "./components/HandshakeVisualizer";
 import { DisputeConsole } from "./components/DisputeConsole";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const panelStyle: React.CSSProperties = {
   display: "flex",
@@ -27,13 +28,19 @@ export function App() {
       }}
     >
       <div style={{ ...panelStyle, borderRight: "1px solid #222" }}>
-        <ThoughtStream resetToken={resetToken} />
+        <ErrorBoundary label="Thought Stream Offline">
+          <ThoughtStream resetToken={resetToken} />
+        </ErrorBoundary>
       </div>
       <div style={{ ...panelStyle, borderRight: "1px solid #222" }}>
-        <HandshakeVisualizer resetToken={resetToken} onReset={handleReset} />
+        <ErrorBoundary label="Handshake Visualizer Error">
+          <HandshakeVisualizer resetToken={resetToken} onReset={handleReset} />
+        </ErrorBoundary>
       </div>
       <div style={panelStyle}>
-        <DisputeConsole resetToken={resetToken} />
+        <ErrorBoundary label="Dispute Console Offline">
+          <DisputeConsole resetToken={resetToken} />
+        </ErrorBoundary>
       </div>
     </div>
   );
