@@ -36,7 +36,7 @@ function EnvelopeRow({ env }: { env: Envelope }) {
         }}
       >
         <span style={{ color, fontSize: 10, fontWeight: "bold", minWidth: 80 }}>{env.type}</span>
-        <span style={{ color: "#555", fontSize: 10, flex: 1 }}>…{env.trace_id.slice(-16)}</span>
+        <span style={{ color: "#555", fontSize: 10, flex: 1 }}>{env.trace_id.replace(/^urn:uuid:/, "")}</span>
         <span style={{ color: "#444", fontSize: 10 }}>{expanded ? "▲" : "▼"}</span>
       </div>
       {expanded && (
@@ -55,8 +55,11 @@ function EnvelopeRow({ env }: { env: Envelope }) {
 // ── Dispute pack (Bank-B DAG) ───────────────────────────────────────────────
 
 function DisputePackView({ proxyBUrl, resetToken }: { proxyBUrl: string; resetToken: number }) {
+  const envA = useEnvelopes(PROXY_A, resetToken);
   const envB = useEnvelopes(proxyBUrl, resetToken);
-  const traceIds = useMemo(() => [...new Set(envB.map((e) => e.trace_id))], [envB]);
+  const traceIds = useMemo(() => {
+    return [...new Set([...envA, ...envB].map((e) => e.trace_id.replace(/^urn:uuid:/, "")))];
+  }, [envA, envB]);
   const [selectedTrace, setSelectedTrace] = useState("");
   const [pack, setPack] = useState<DisputePack | null>(null);
   const [loading, setLoading] = useState(false);
@@ -66,8 +69,9 @@ function DisputePackView({ proxyBUrl, resetToken }: { proxyBUrl: string; resetTo
   const fetchPack = async (id: string) => {
     if (!id) return;
     setLoading(true);
+    const fullId = id.startsWith("urn:uuid:") ? id : `urn:uuid:${id}`;
     try {
-      const r = await fetch(`${proxyBUrl}/dispute/${encodeURIComponent(id)}`);
+      const r = await fetch(`${proxyBUrl}/dispute/${encodeURIComponent(fullId)}`);
       setPack(await r.json());
     } finally { setLoading(false); }
   };
@@ -89,7 +93,11 @@ function DisputePackView({ proxyBUrl, resetToken }: { proxyBUrl: string; resetTo
           }}
         >
           <option value="">Select trace ID…</option>
-          {traceIds.map((id) => <option key={id} value={id}>…{id.slice(-24)}</option>)}
+          {traceIds.map((id) => (
+            <option key={id} value={id}>
+              {id}
+            </option>
+          ))}
         </select>
         <button onClick={() => fetchPack(selectedTrace)} disabled={!selectedTrace || loading}
           style={{ padding: "3px 8px", background: "#1a2a3a", border: "1px solid #7bb3ff", borderRadius: 3, color: "#7bb3ff", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}>
@@ -141,6 +149,44 @@ interface VerifyResult {
   leaves: VerifyLeaf[];
 }
 
+function LeafRow({ leaf }: { leaf: VerifyResult["leaves"][0] }) {
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const typeColor = TYPE_COLOR[leaf.envelopeType ?? ""] ?? "#666";
+  return (
+    <div style={{
+      background: "#0d0d0d", borderRadius: 4, 
+      border: `1px solid ${leaf.proofValid ? "#1a3a1a" : "#3a1a1a"}`,
+      marginBottom: 4, overflow: "hidden"
+    }}>
+      <div 
+        onClick={() => setLocalExpanded(!localExpanded)}
+        style={{
+          padding: "7px 10px", display: "grid", gridTemplateColumns: "18px 80px 1fr auto 20px",
+          gap: "0 8px", alignItems: "center", fontSize: 10, cursor: "pointer"
+        }}
+      >
+        <span style={{ color: "#444" }}>#{leaf.leafIndex}</span>
+        <span style={{ color: typeColor, fontWeight: "bold" }}>{leaf.envelopeType ?? "—"}</span>
+        <span style={{ color: "#555" }}>
+          {(leaf.traceId || leaf.envelopeId).replace(/^urn:uuid:/, "")}
+        </span>
+        <span style={{ color: leaf.proofValid ? "#4caf50" : "#f44336", fontWeight: "bold" }}>
+          {leaf.proofValid ? "✓" : "✗"}
+        </span>
+        <span style={{ color: "#444" }}>{localExpanded ? "▲" : "▼"}</span>
+      </div>
+      {localExpanded && (
+        <pre style={{
+          fontSize: 9, padding: 8, background: "#050505", color: "#888",
+          margin: 0, borderTop: "1px solid #1a1a1a", overflowX: "auto"
+        }}>
+          {JSON.stringify((leaf as any).payload, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function AnchorVerifyView() {
   const [input, setInput] = useState("");
   const [result, setResult] = useState<VerifyResult | null>(null);
@@ -154,9 +200,13 @@ function AnchorVerifyView() {
     setResult(null);
     setNotFound(false);
     try {
-      const r = await fetch(`${PROXY_A}/verify/${encodeURIComponent(txHash)}`);
+      const r = await fetch(`${PROXY_B}/verify/${encodeURIComponent(txHash)}`);
       if (r.status === 404) { setNotFound(true); return; }
-      setResult(await r.json());
+      const data = await r.json();
+      setResult(data);
+    } catch (err) {
+      console.error("Verify failed:", err);
+      alert("Verify failed: " + (err instanceof Error ? err.message : String(err)));
     } finally { setLoading(false); }
   };
 
@@ -270,26 +320,9 @@ function AnchorVerifyView() {
           <div style={{ color: "#555", fontSize: 10, paddingLeft: 2 }}>
             Merkle leaves — proofs re-derived and verified against on-chain root:
           </div>
-          {result.leaves.map((leaf) => {
-            const typeColor = TYPE_COLOR[leaf.envelopeType ?? ""] ?? "#666";
-            return (
-              <div key={leaf.leafIndex} style={{
-                background: "#0d0d0d", borderRadius: 4, padding: "7px 10px",
-                border: `1px solid ${leaf.proofValid ? "#1a3a1a" : "#3a1a1a"}`,
-                display: "grid", gridTemplateColumns: "18px 80px 1fr auto",
-                gap: "0 8px", alignItems: "center", fontSize: 10,
-              }}>
-                <span style={{ color: "#444" }}>#{leaf.leafIndex}</span>
-                <span style={{ color: typeColor, fontWeight: "bold" }}>{leaf.envelopeType ?? "—"}</span>
-                <span style={{ color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {leaf.traceId ? `…${leaf.traceId.slice(-20)}` : leaf.envelopeId.slice(-24)}
-                </span>
-                <span style={{ color: leaf.proofValid ? "#4caf50" : "#f44336", fontWeight: "bold" }}>
-                  {leaf.proofValid ? "✓" : "✗"}
-                </span>
-              </div>
-            );
-          })}
+          {result.leaves.map((leaf) => (
+            <LeafRow key={leaf.leafIndex} leaf={leaf} />
+          ))}
 
           {/* Full JSON */}
           <div style={{ color: "#555", fontSize: 10, paddingLeft: 2, marginTop: 4 }}>
@@ -308,10 +341,90 @@ function AnchorVerifyView() {
   );
 }
 
+// ── Cross-Check View ────────────────────────────────────────────────────────
+
+function CrossCheckView({ resetToken }: { resetToken: number }) {
+  const envA = useEnvelopes(PROXY_A, resetToken);
+  const traceIds = useMemo(() => [...new Set(envA.map((e) => e.trace_id.replace(/^urn:uuid:/, "")))], [envA]);
+  const [selectedTrace, setSelectedTrace] = useState("");
+  const [result, setResult] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => { setSelectedTrace(""); setResult(null); }, [resetToken]);
+
+  const crossCheck = async () => {
+    const id = selectedTrace.trim();
+    if (!id) return;
+    setLoading(true);
+    try {
+      const fullId = id.startsWith("urn:uuid:") ? id : `urn:uuid:${id}`;
+      const r = await fetch(`${PROXY_A}/cross-check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ traceId: fullId }),
+      });
+      setResult(await r.json());
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ padding: "8px 10px", height: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <input
+          list="trace-ids-list"
+          value={selectedTrace}
+          onChange={(e) => { setSelectedTrace(e.target.value); setResult(null); }}
+          onKeyDown={(e) => e.key === "Enter" && crossCheck()}
+          placeholder="Select or enter trace ID…"
+          style={{
+            flex: 1, background: "#111", color: "#ccc", border: "1px solid #333",
+            borderRadius: 3, padding: "3px 6px", fontFamily: "inherit", fontSize: 11,
+            outline: "none"
+          }}
+        />
+        <datalist id="trace-ids-list">
+          {traceIds.map((id) => (
+            <option key={id} value={id} />
+          ))}
+        </datalist>
+        <button onClick={crossCheck} disabled={!selectedTrace.trim() || loading}
+          style={{ padding: "4px 12px", background: "#1a2a3a", border: "1px solid #7bb3ff", borderRadius: 3, color: "#7bb3ff", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}>
+          {loading ? "Checking..." : "Cross-Check"}
+        </button>
+      </div>
+      {!selectedTrace && <div style={{ color: "#444", fontSize: 11 }}>Select a trace ID to verify bilateral identicality.</div>}
+      {result && (
+        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{
+            background: result.synced ? "#001a00" : "#1a0000",
+            border: `1px solid ${result.synced ? "#1a4a1a" : "#4a1a1a"}`,
+            borderRadius: 6, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center"
+          }}>
+            <span style={{ color: "#fff", fontSize: 12, fontWeight: "bold" }}>Bilateral Integrity Status</span>
+            <span style={{ color: result.synced ? "#4caf50" : "#f44336", fontSize: 12, fontWeight: "bold" }}>
+              {result.synced ? "✓ SYNCED" : "✗ MISMATCH"}
+            </span>
+          </div>
+          {result.details?.map((d: any) => (
+            <div key={d.type} style={{
+              background: "#0d0d0d", borderRadius: 4, padding: "7px 10px",
+              border: `1px solid ${d.match ? "#1a3a1a" : "#3a1a1a"}`,
+              display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10,
+            }}>
+              <span style={{ color: TYPE_COLOR[d.type] ?? "#fff", fontWeight: "bold" }}>{d.type}</span>
+              <span style={{ color: d.match ? "#4caf50" : "#f44336" }}>{d.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ──────────────────────────────────────────────────────────
 
 export function DisputeConsole({ resetToken = 0 }: { resetToken?: number }) {
-  const [tab, setTab] = useState<"envelopes" | "dispute" | "anchor">("envelopes");
+  const [tab, setTab] = useState<"envelopes" | "dispute" | "anchor" | "cross_check">("envelopes");
   const [nodeTab, setNodeTab] = useState<"bank-a" | "bank-b">("bank-a");
 
   const envA = useEnvelopes(PROXY_A, resetToken);
@@ -340,28 +453,37 @@ export function DisputeConsole({ resetToken = 0 }: { resetToken?: number }) {
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={{
         padding: "10px 12px", borderBottom: "1px solid #222",
-        display: "flex", alignItems: "center", gap: 8,
+        display: "flex", flexDirection: "column", justifyContent: "center", gap: 6,
+        minHeight: 84, boxSizing: "border-box",
       }}>
-        <span style={{
-          color: "#7bb3ff", fontWeight: "bold", fontSize: 12,
-          letterSpacing: 1, textTransform: "uppercase", marginRight: 4,
-        }}>
-          Dispute Console
-        </span>
-        {tabBtn("Envelopes", tab === "envelopes", () => setTab("envelopes"))}
-        {tabBtn("Dispute Pack", tab === "dispute", () => setTab("dispute"))}
-        {tabBtn("⛓ Anchor", tab === "anchor", () => setTab("anchor"))}
-      </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{
+            color: "#7bb3ff", fontWeight: "bold", fontSize: 12,
+            letterSpacing: 1, textTransform: "uppercase", marginRight: 4,
+          }}>
+            Dispute Console
+          </span>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {tabBtn("Envelopes", tab === "envelopes", () => setTab("envelopes"))}
+            {tabBtn("Dispute Pack", tab === "dispute", () => setTab("dispute"))}
+            {tabBtn("Verify Anchor", tab === "anchor", () => setTab("anchor"))}
+            {tabBtn("Cross-Check", tab === "cross_check", () => setTab("cross_check"))}
+          </div>
+        </div>
 
-      {tab === "envelopes" && (
-        <>
-          <div style={{ padding: "6px 10px", borderBottom: "1px solid #1a1a1a", display: "flex", gap: 6 }}>
+        {tab === "envelopes" && (
+          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
             {tabBtn("Bank-A", nodeTab === "bank-a", () => setNodeTab("bank-a"))}
             {tabBtn("Bank-B", nodeTab === "bank-b", () => setNodeTab("bank-b"))}
             <span style={{ color: "#444", fontSize: 10, alignSelf: "center", marginLeft: "auto" }}>
               {envelopes.length} records
             </span>
           </div>
+        )}
+      </div>
+
+      {tab === "envelopes" && (
+        <>
           <div style={{ flex: 1, overflowY: "auto", padding: "6px 10px" }}>
             {envelopes.length === 0 && <div style={{ color: "#444", fontSize: 11 }}>No envelopes yet.</div>}
             {envelopes.map((env) => <EnvelopeRow key={env.id} env={env} />)}
@@ -378,6 +500,12 @@ export function DisputeConsole({ resetToken = 0 }: { resetToken?: number }) {
       {tab === "anchor" && (
         <div style={{ flex: 1, overflow: "hidden" }}>
           <AnchorVerifyView />
+        </div>
+      )}
+
+      {tab === "cross_check" && (
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <CrossCheckView resetToken={resetToken} />
         </div>
       )}
     </div>

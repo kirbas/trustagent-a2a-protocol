@@ -32,43 +32,67 @@ Trust-Agent/
 ├── Bank-A/
 │   ├── proxy/
 │   │   ├── src/
-│   │   │   ├── server.ts          Express app: /invoke /trigger /trigger-done /reset /thought /events /envelopes /health
-│   │   │   ├── db.ts              better-sqlite3: 4-table schema, saveEnvelope(), getEnvelopes(), clearEnvelopes()
+│   │   │   ├── server.ts          Express app: /invoke /trigger /trigger-done /reset /thought /events /envelopes /cross-check /health
+│   │   │   ├── db.ts              better-sqlite3: 4-table schema (envelopes, ledger_chain, risk_budgets, provenance), saveEnvelope(), getEnvelopesByTraceId(), clearEnvelopes()
 │   │   │   ├── sse.ts             SseBus: addClient(res), broadcast(event, data)
 │   │   │   └── key-exchange.ts    registerWithProxyB() retry loop (25× @ 1s)
 │   │   ├── package.json           ESM, file: dep on trust-agent
 │   │   ├── tsconfig.json          NodeNext, rootDir:src, outDir:dist
 │   │   └── Dockerfile             context:. (repo root), --install-links
+│   │   └── Dockerfile
 │   └── agent/
 │       ├── agent.py               Polls /trigger-status → runs 2 scenarios → loops back (while True)
 │       ├── requirements.txt       requests==2.31.0 only
 │       └── Dockerfile
 │
 ├── Bank-B/
+│       ├── domain/
+│       │   ├── merkle.py          build_merkle_tree(), verify_proof()
+│       │   └── models.py          Envelope, AnchorRecord dataclasses
+│       ├── infra/
+│       │   ├── db.py              SQLiteRepository: envelopes + anchors + anchor_leaves tables
+│       │   └── notary.py          BlockchainNotary: EIP-1559 0-ETH self-tx to Base Sepolia
+│       ├── app/
+│       │   └── accounting_agent.py  AccountingAgent.run(): seed → merkle → anchor → verify proofs
+│       ├── main.py                Entry point; loads root .env via find_dotenv()
+│       └── requirements.txt       web3>=6.0.0, python-dotenv>=1.0.0
+│
+├── Bank-B/
 │   ├── proxy/
 │   │   ├── src/
-│   │   │   ├── server.ts          Express app: /accept /executed /register-peer-key /reset /thought /events /envelopes /dispute/:id /flush /health
-│   │   │   ├── db.ts              same schema as Bank-A, /data/bank-b.db, clearEnvelopes()
+│   │   │   ├── server.ts          Express app: /accept /executed /register-peer-key /reset /thought /events /envelopes /dispute/:id /flush /health /anchor /envelopes-by-trace/:traceId /verify/:txHash
+│   │   │   ├── db.ts              6-table schema (envelopes, ledger_chain, risk_budgets, provenance, anchors, anchor_leaves), /data/bank-b.db, clearEnvelopes(), getEnvelopesByTraceId()
 │   │   │   └── sse.ts             identical SseBus
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   └── Dockerfile
-│   └── agent/
-│       ├── agent.py               Long-running SSE subscriber → emits vendor thoughts
-│       ├── requirements.txt
-│       └── Dockerfile
+│   ├── agent/
+│   │   ├── agent.py               Long-running SSE subscriber → emits vendor thoughts
+│   │   ├── requirements.txt
+│   │   └── Dockerfile
+│   └── merkle-anchor/    Python DDD service: standalone Merkle anchor Flask app (port 5001)
+│       ├── domain/
+│       │   ├── merkle.py          build_merkle_tree(), verify_proof()
+│       │   └── models.py          Envelope, AnchorRecord dataclasses
+│       ├── infra/
+│       │   ├── db.py              SQLiteRepository: reads proxy's envelopes table, writes to anchors/anchor_leaves
+│       │   └── notary.py          BlockchainNotary: EIP-1559 0-ETH self-tx to Base Sepolia
+│       ├── app/
+│       │   └── accounting_agent.py  AccountingAgent.run(): fetch unanchored → merkle → anchor
+│       ├── main.py                Flask HTTP server /anchor
+│       └── requirements.txt       Flask, web3>=6.0.0, python-dotenv>=1.0.0
 │
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx                3-column grid; owns resetToken state + onReset callback
-│   │   ├── types.ts               ThoughtEvent, HandshakeEvent, Envelope, DisputePack
+│   │   ├── types.ts               ThoughtEvent, HandshakeEvent, Envelope, DisputePack, AnchorEvent
 │   │   ├── hooks/
 │   │   │   ├── useSSE.ts          EventSource wrapper; resetToken param clears state on change
 │   │   │   └── useEnvelopes.ts    polls /envelopes every 3s; resetToken param clears + re-fetches
 │   │   └── components/
 │   │       ├── ThoughtStream.tsx  merged Bank-A + Bank-B thoughts, auto-scroll; { resetToken }
 │   │       ├── HandshakeVisualizer.tsx  trace timelines; Start Demo / Clear+restart buttons; { resetToken, onReset }
-│   │       └── DisputeConsole.tsx  Envelopes tab + Dispute Pack tab; { resetToken }; resets local state on token change
+│   │       └── DisputeConsole.tsx  Envelopes, Dispute Pack, Anchor to L2, Verify Anchor, Cross-Check tabs.
 │   ├── package.json               React 18, Vite 5, TypeScript
 │   ├── tsconfig.json              bundler moduleResolution, vite/client types
 │   ├── vite.config.ts
@@ -229,6 +253,11 @@ if (result.error) {
 | `FRONTEND_ORIGIN` | both proxies | http://localhost:3000 | CORS allowed origin |
 | `PROXY_A_URL` | bank-a-agent | http://localhost:3001 | Bank-A proxy base URL |
 | `PROXY_B_URL` | bank-b-agent | http://localhost:3002 | Bank-B proxy base URL |
+| `ANCHOR_URL`  | bank-b-proxy | http://bank-b-anchor:5001 | Bank-B anchor service URL |
+| `RPC_URL` | bank-b-anchor | (none) | Base Sepolia JSON-RPC URL (e.g. Alchemy) — required for anchoring |
+| `PRIVATE_KEY` | bank-b-anchor | (none) | Burner wallet private key — required for anchoring; address derived automatically |
+
+All sensitive values (`RPC_URL`, `PRIVATE_KEY`) live in a single root `.env` file (see `.env.example`). Docker Compose reads it via variable substitution. The Python `merkle-anchor` CLI finds it via `python-dotenv`'s `find_dotenv()` walk.
 
 Frontend proxy URLs are hardcoded as `import.meta.env.VITE_PROXY_A_URL ?? "http://localhost:3001"` — set at Vite build time via `VITE_*` env vars if needed.
 
@@ -254,6 +283,15 @@ Edit `maxSingleActionUsd` and `dailyBudgetUsd` in `Bank-B/proxy/src/server.ts` (
 
 ### Add a new frontend panel
 Create a new component in `frontend/src/components/`, import it in `App.tsx`, add a column to the grid.
+
+### Verify a Merkle anchor dispute pack
+Paste a transaction hash from BaseScan into the "⛓ Anchor" tab in the Dispute Console.
+Or hit the API directly:
+```bash
+curl "http://localhost:3002/verify/0x<txHash>" | python3 -m json.tool
+```
+Response includes `allValid: true/false`, per-leaf `proofValid`, and the full dispute pack JSON.
+The downloaded file is named `{txHash}.json`.
 
 ---
 

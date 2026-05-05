@@ -167,12 +167,23 @@ export class ProxyAGateway {
       proxyKey: this.cfg.proxyKey,
     });
 
-    // 5. Notify Proxy B of execution result (fire-and-forget for latency)
-    fetch(`${this.cfg.proxyBEndpoint}/executed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ execution: executionEnv }),
-    }).catch(() => {}); // best-effort
+    // 5. Notify Proxy B of execution result and receive dual-signed receipt
+    let finalExecutionEnv = executionEnv;
+    try {
+      const resp = await fetch(`${this.cfg.proxyBEndpoint}/executed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ execution: executionEnv }),
+      });
+      if (resp.ok) {
+        const body = await resp.json() as { execution?: ExecutionEnvelope };
+        if (body.execution) {
+          finalExecutionEnv = body.execution;
+        }
+      }
+    } catch (e) {
+      // best-effort fallback
+    }
 
     if (status === "FAILED") {
       return this._mcpError(call.id, -32000, "Tool execution failed");
@@ -183,7 +194,7 @@ export class ProxyAGateway {
       id: call.id,
       result: {
         content: [{ type: "text", text: JSON.stringify(outputData) }],
-        _a2a: { intent_envelope: intentEnv, acceptance_receipt: acceptance, execution_envelope: executionEnv },
+        _a2a: { intent_envelope: intentEnv, acceptance_receipt: acceptance, execution_envelope: finalExecutionEnv },
       },
     };
   }

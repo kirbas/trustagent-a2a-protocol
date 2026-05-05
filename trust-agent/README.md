@@ -233,9 +233,9 @@ docs/
 - [x] `PROVENANCE_RECORD` event type in DAG ledger
 - [x] Regulatory alignment section (EU AI Act, DSA, US EO, CA AB 2602)
 - [x] C2PA interoperability spec
-- [ ] TypeScript implementation of `ContentProvenanceReceipt`
+- [x] TypeScript implementation of `ContentProvenanceReceipt`
+- [x] L2 anchoring integration (Base Sepolia) — Bank-A proxy fires 0-ETH self-tx after every transaction (accepted and rejected); per-leaf Merkle inclusion proofs stored; `/verify/:txHash` audit API
 - [ ] Python SDK
-- [ ] L2 anchoring integration (Base / Arbitrum)
 - [ ] Verifiable Credential (VC) policy loader
 - [ ] Native MCP SDK integration
 

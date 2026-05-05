@@ -1,4 +1,5 @@
 import uuid
+import sys
 
 from domain.merkle import build_merkle_tree, verify_proof
 from domain.models import AnchorRecord
@@ -6,7 +7,7 @@ from infra.db import SQLiteRepository
 from infra.notary import BlockchainNotary
 
 BASESCAN_TX_URL = "https://sepolia.basescan.org/tx/0x{tx_hash}"
-BATCH_SIZE = 10
+BATCH_SIZE = 50  # Anchor up to 50 envelopes at a time
 
 
 class AccountingAgent:
@@ -15,19 +16,22 @@ class AccountingAgent:
         self._notary = notary
 
     def _log(self, message: str) -> None:
-        print(f"[AccountingAgent] {message}")
+        print(f"[AccountingAgent - Proxy B] {message}", file=sys.stdout)
 
-    def run(self) -> None:
+    def anchor_pending_envelopes(self) -> dict:
+        """
+        Gathers unanchored envelopes, computes the Merkle root,
+        and anchors to Base Sepolia.
+        Returns a dict with txHash, blockNumber, basescanUrl.
+        """
         self._log("Waking up. Scanning local ledger...")
 
-        self._db.seed_mock_envelopes(BATCH_SIZE)
-
-        envelopes = self._db.get_recent_envelopes(limit=BATCH_SIZE)
+        envelopes = self._db.get_unanchored_envelopes(limit=BATCH_SIZE)
         if not envelopes:
-            self._log("No envelopes found. Exiting.")
-            return
+            self._log("No unanchored envelopes found. Nothing to do.")
+            return {"status": "noop", "message": "No unanchored envelopes found"}
 
-        self._log(f"I am aggregating the last {len(envelopes)} receipts into a tamper-evident root.")
+        self._log(f"I am aggregating {len(envelopes)} receipts into a tamper-evident root.")
 
         signatures = [e.signature for e in envelopes]
         merkle_root, leaves = build_merkle_tree(signatures)
@@ -38,6 +42,7 @@ class AccountingAgent:
         pending = AnchorRecord(batch_id=batch_id, merkle_root=merkle_root, status="PENDING")
         self._db.save_anchor(pending)
 
+        self._log("Proxy B: Action executed. Signing result and initiating Merkle anchor for dispute-grade proof.")
         self._log("Broadcasting anchor to Base Sepolia (chain 84532)...")
 
         try:
@@ -68,4 +73,18 @@ class AccountingAgent:
         )
 
         vc_link = BASESCAN_TX_URL.format(tx_hash=result["tx_hash"])
-        print(f"\nVC Pitch Link → {vc_link}\n")
+        self._log(f"VC Pitch Link → {vc_link}")
+
+        # Update ledger_chain table if needed (using the payload_hash from the envelope, which is the trace_id in our schema)
+        for env in envelopes:
+             self._db.update_ledger_chain(env.payload_hash, result["tx_hash"])
+
+
+        return {
+            "status": "success",
+            "txHash": result["tx_hash"],
+            "blockNumber": result["block_number"],
+            "merkleRoot": merkle_root,
+            "basescanUrl": vc_link,
+            "traceIds": [e.payload_hash for e in envelopes]
+        }

@@ -31,22 +31,6 @@ export function initDb(path: string): void {
       receipt_sig TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS anchors (
-      batch_id TEXT PRIMARY KEY,
-      merkle_root TEXT NOT NULL,
-      tx_hash TEXT,
-      block_number INTEGER,
-      status TEXT NOT NULL DEFAULT 'PENDING',
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS anchor_leaves (
-      batch_id TEXT NOT NULL,
-      leaf_index INTEGER NOT NULL,
-      envelope_id TEXT NOT NULL,
-      leaf_hash TEXT NOT NULL,
-      proof_path TEXT NOT NULL,
-      PRIMARY KEY (batch_id, leaf_index)
-    );
   `);
 }
 
@@ -78,74 +62,11 @@ export function saveProvenance(contentHash: string, txId: string, receiptSig: st
   ).run(contentHash, txId, receiptSig, new Date().toISOString());
 }
 
-export function saveAnchor(anchor: {
-  batchId: string;
-  merkleRoot: string;
-  txHash?: string;
-  blockNumber?: number;
-  status: string;
-}): void {
-  db.prepare(
-    `INSERT OR REPLACE INTO anchors (batch_id, merkle_root, tx_hash, block_number, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(
-    anchor.batchId,
-    anchor.merkleRoot,
-    anchor.txHash ?? null,
-    anchor.blockNumber ?? null,
-    anchor.status,
-    new Date().toISOString()
-  );
-}
-
-export function saveAnchorLeaves(
-  batchId: string,
-  leaves: Array<{ leafIndex: number; envelopeId: string; leafHash: string; proofPath: string }>
-): void {
-  const stmt = db.prepare(
-    "INSERT OR IGNORE INTO anchor_leaves (batch_id, leaf_index, envelope_id, leaf_hash, proof_path) VALUES (?, ?, ?, ?, ?)"
-  );
-  for (const leaf of leaves) {
-    stmt.run(batchId, leaf.leafIndex, leaf.envelopeId, leaf.leafHash, leaf.proofPath);
-  }
-}
-
-export interface AnchorRow {
-  batch_id: string;
-  merkle_root: string;
-  tx_hash: string | null;
-  block_number: number | null;
-  status: string;
-  created_at: string;
-}
-
-export interface AnchorLeafRow {
-  leaf_index: number;
-  envelope_id: string;
-  leaf_hash: string;
-  proof_path: string;
-  envelope_type: string | null;
-  trace_id: string | null;
-}
-
-export function getAnchorByTxHash(txHash: string): AnchorRow | null {
-  return db.prepare("SELECT * FROM anchors WHERE tx_hash = ?").get(txHash) as AnchorRow | null;
-}
-
-export function getAnchorLeaves(batchId: string): AnchorLeafRow[] {
-  return db.prepare(`
-    SELECT al.leaf_index, al.envelope_id, al.leaf_hash, al.proof_path,
-           e.type AS envelope_type, e.trace_id
-    FROM anchor_leaves al
-    LEFT JOIN envelopes e ON e.id = al.envelope_id
-    WHERE al.batch_id = ?
-    ORDER BY al.leaf_index ASC
-  `).all(batchId) as AnchorLeafRow[];
+export function getEnvelopesByTraceId(traceId: string): unknown[] {
+  return db.prepare("SELECT * FROM envelopes WHERE trace_id = ? ORDER BY created_at ASC").all(traceId);
 }
 
 export function clearEnvelopes(): void {
   db.exec("DELETE FROM envelopes");
   db.exec("DELETE FROM provenance");
-  db.exec("DELETE FROM anchors");
-  db.exec("DELETE FROM anchor_leaves");
 }

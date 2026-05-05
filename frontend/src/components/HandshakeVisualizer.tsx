@@ -43,9 +43,12 @@ export function HandshakeVisualizer({
   const [running, setRunning] = useState(false);
 
   const demoRaw = useSSE(`${PROXY_A}/events`, "demo-triggered", resetToken);
-  const execRaw = useSSE(`${PROXY_A}/events`, "execution-complete", resetToken);
-  const anchorPendingRaw = useSSE(`${PROXY_A}/events`, "anchor-pending", resetToken);
-  const anchorCompleteRaw = useSSE(`${PROXY_A}/events`, "anchor-complete", resetToken);
+  const execARaw = useSSE(`${PROXY_A}/events`, "execution-complete", resetToken);
+  const execBRaw = useSSE(`${PROXY_B}/events`, "execution-complete", resetToken);
+  const envelopeARaw = useSSE(`${PROXY_A}/events`, "envelope", resetToken);
+  const anchorPendingRaw = useSSE(`${PROXY_B}/events`, "anchor-pending", resetToken);
+  const anchorCompleteRaw = useSSE(`${PROXY_B}/events`, "anchor-complete", resetToken);
+  const anchorFailedRaw = useSSE(`${PROXY_B}/events`, "anchor-failed", resetToken);
   const acceptedRaw = useSSE(`${PROXY_B}/events`, "intent-accepted", resetToken);
   const rejectedRaw = useSSE(`${PROXY_B}/events`, "intent-rejected", resetToken);
 
@@ -53,18 +56,22 @@ export function HandshakeVisualizer({
     if (demoRaw.length > 0) setRunning(true);
   }, [demoRaw.length]);
 
-  const demoComplete = execRaw.length > 0 && rejectedRaw.length > 0;
-
   const traces = useMemo<Trace[]>(() => {
     const map = new Map<string, Trace>();
 
     const addOrGet = (traceId: string, tool: string, cost: number): Trace => {
-      if (!map.has(traceId)) {
-        map.set(traceId, { traceId, tool, cost, steps: [] });
+      let t = map.get(traceId);
+      if (!t) {
+        t = { traceId, tool, cost, steps: [] };
+        map.set(traceId, t);
+      } else {
+        if (!t.tool && tool) t.tool = tool;
+        if (!t.cost && cost) t.cost = cost;
       }
-      return map.get(traceId)!;
+      return t;
     };
 
+    // 1. Process intents (Accepted or Rejected)
     parseAll(acceptedRaw).forEach((e) => {
       if (!e.traceId) return;
       const t = addOrGet(e.traceId, e.tool ?? "", e.cost ?? 0);
@@ -76,45 +83,68 @@ export function HandshakeVisualizer({
       if (!e.traceId) return;
       const t = addOrGet(e.traceId, e.tool ?? "", e.cost ?? 0);
       t.steps.push({ label: "INTENT → PROXY-B", ok: true });
-      t.steps.push({ label: `REJECTED — ${e.reason ?? "ERR_BUDGET_EXCEEDED"}`, ok: false });
+      t.steps.push({ label: `REJECTED — ${e.reason ?? "ERR_BUDGET"}`, ok: false });
     });
 
-    parseAll(execRaw).forEach((e) => {
+    // 2. Process executions
+    parseAll(execARaw).forEach((e) => {
       if (!e.traceId) return;
       const t = addOrGet(e.traceId, e.tool ?? "", e.cost ?? 0);
       t.steps.push({
-        label: e.status === "COMPLETED" ? "EXECUTED ✓" : "EXECUTE FAILED",
+        label: e.status === "COMPLETED" ? "EXECUTED (A) ✓" : "FAILED (A)",
         ok: e.status === "COMPLETED",
       });
     });
 
-    // Anchor pending — show spinner on the trace while waiting for chain confirmation
+    parseAll(execBRaw).forEach((e) => {
+      if (!e.traceId) return;
+      const t = addOrGet(e.traceId, e.tool ?? "", e.cost ?? 0);
+      t.steps.push({
+        label: e.status === "COMPLETED" ? "EXECUTED (B) ✓" : "FAILED (B)",
+        ok: e.status === "COMPLETED",
+      });
+    });
+
+    // 3. Process Provenance (Bank-A)
+    parseAll(envelopeARaw).forEach((e: any) => {
+      if (e.type === "PROVENANCE") {
+        const t = map.get(e.traceId);
+        if (t) t.steps.push({ label: "PROVENANCE ✓", ok: true });
+      }
+    });
+
+    // 4. Process Anchoring (Bank-B)
     parseAnchors(anchorPendingRaw).forEach((e) => {
       const t = map.get(e.traceId);
       if (!t) return;
-      // Only add if not already anchored
-      const alreadyAnchored = t.steps.some((s) => s.basescanUrl);
-      if (!alreadyAnchored) {
+      if (!t.steps.some((s) => s.label === "ANCHORING ⏳" || s.basescanUrl)) {
         t.steps.push({ label: "ANCHORING ⏳", ok: true, pending: true });
       }
     });
 
-    // Anchor complete — replace pending step with confirmed link
     parseAnchors(anchorCompleteRaw).forEach((e) => {
       const t = map.get(e.traceId);
       if (!t) return;
-      // Remove pending step if present
-      const pendingIdx = t.steps.findIndex((s) => s.pending);
-      if (pendingIdx !== -1) t.steps.splice(pendingIdx, 1);
+      // Replace pending/existing anchor steps
+      t.steps = t.steps.filter((s) => !s.pending && !s.label.startsWith("ANCHOR"));
       t.steps.push({
-        label: `ANCHORED ⛓ block ${e.blockNumber}`,
+        label: `ANCHORED ⛓ block ${e.blockNumber || "..."}`,
         ok: true,
         basescanUrl: e.basescanUrl,
       });
     });
 
-    return Array.from(map.values());
-  }, [acceptedRaw, rejectedRaw, execRaw, anchorPendingRaw, anchorCompleteRaw]);
+    parseAnchors(anchorFailedRaw).forEach((e: any) => {
+      const t = map.get(e.traceId);
+      if (!t) return;
+      t.steps = t.steps.filter((s) => !s.pending);
+      t.steps.push({ label: `ANCHOR FAILED ✗`, ok: false });
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.traceId.localeCompare(b.traceId));
+  }, [acceptedRaw, rejectedRaw, execARaw, execBRaw, envelopeARaw, anchorPendingRaw, anchorCompleteRaw, anchorFailedRaw]);
+
+  const demoComplete = traces.length >= 3 || (execARaw.length > 0 && rejectedRaw.length > 0);
 
   const trigger = () => {
     fetch(`${PROXY_A}/trigger`, { method: "POST" });
@@ -139,6 +169,8 @@ export function HandshakeVisualizer({
           display: "flex",
           alignItems: "center",
           gap: 12,
+          minHeight: 84,
+          boxSizing: "border-box",
         }}
       >
         <span

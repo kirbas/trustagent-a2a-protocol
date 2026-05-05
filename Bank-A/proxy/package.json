@@ -11,7 +11,6 @@
     "@trustagentai/a2a-core": "file:../../trust-agent",
     "better-sqlite3": "^9.6.0",
     "cors": "^2.8.6",
-    "ethers": "^6.0.0",
     "express": "^4.22.1"
   },
   "devDependencies": {
