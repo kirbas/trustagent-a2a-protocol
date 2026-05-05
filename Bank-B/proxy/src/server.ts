@@ -141,6 +141,7 @@ async function main(): Promise<void> {
     res.json({ ok: true });
   });
 
+  app.get("/events", (_req, res) => sseBus.addClient(res));
   app.get("/envelopes", (_req, res) => res.json(getEnvelopes()));
 
   app.get("/dispute/:id", (req, res) => {
