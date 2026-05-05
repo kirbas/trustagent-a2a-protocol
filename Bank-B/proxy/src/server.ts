@@ -71,14 +71,18 @@ async function main(): Promise<void> {
   const proxyAPublicKeys = new Map<string, Uint8Array>();
   initProxyB(proxyKey, proxyAPublicKeys);
 
-  async function runAnchor(traceId: string) {
+  const pendingAnchorTraces = new Set<string>();
+
+  async function runAnchor(traceIds: string[]) {
     try {
-      sseBus.broadcast("anchor-pending", { traceId, ts: new Date().toISOString() });
+      traceIds.forEach((tid) =>
+        sseBus.broadcast("anchor-pending", { traceId: tid, ts: new Date().toISOString() })
+      );
       const response = await fetch(`${ANCHOR_URL}/anchor`, { method: "POST" });
       const data = await response.json();
       if (response.ok && data.status === "success") {
-        const traceIds: string[] = data.traceIds || [traceId];
-        traceIds.forEach((tid) => {
+        const anchored: string[] = [...new Set<string>(data.traceIds || traceIds)];
+        anchored.forEach((tid) => {
           sseBus.broadcast("anchor-complete", {
             traceId: tid,
             merkleRoot: data.merkleRoot,
@@ -90,15 +94,19 @@ async function main(): Promise<void> {
           console.log(`[bank-b-proxy] ANCHORED ${tid} — block ${data.blockNumber}`);
         });
       } else if (response.ok && data.status === "noop") {
-        console.log(`[bank-b-proxy] Anchor noop for ${traceId} (already anchored or nothing pending)`);
+        console.log(`[bank-b-proxy] Anchor noop (nothing pending)`);
       } else {
         const errorMsg = data.error || data.message || "Unknown error";
-        console.error(`[bank-b-proxy] Anchor failed for ${traceId}:`, errorMsg);
-        sseBus.broadcast("anchor-failed", { traceId, error: errorMsg, ts: new Date().toISOString() });
+        console.error(`[bank-b-proxy] Anchor failed:`, errorMsg);
+        traceIds.forEach((tid) =>
+          sseBus.broadcast("anchor-failed", { traceId: tid, error: errorMsg, ts: new Date().toISOString() })
+        );
       }
     } catch (err) {
-      console.error(`[bank-b-proxy] Anchor request failed for ${traceId}:`, err);
-      sseBus.broadcast("anchor-failed", { traceId, error: String(err), ts: new Date().toISOString() });
+      console.error(`[bank-b-proxy] Anchor request failed:`, err);
+      traceIds.forEach((tid) =>
+        sseBus.broadcast("anchor-failed", { traceId: tid, error: String(err), ts: new Date().toISOString() })
+      );
     }
   }
 
@@ -116,6 +124,7 @@ async function main(): Promise<void> {
   });
 
   app.post("/reset", (_req, res) => {
+    pendingAnchorTraces.clear();
     initProxyB(proxyKey, proxyAPublicKeys);
     clearEnvelopes();
     sseBus.broadcast("demo-reset", { ts: new Date().toISOString() });
@@ -177,7 +186,7 @@ async function main(): Promise<void> {
 
       console.log(`[bank-b-proxy] REJECTED ${traceId} — ${result.error}`);
       res.status(400).json({ error: result.error, errorCode: result.errorCode });
-      runAnchor(traceId);
+      pendingAnchorTraces.add(traceId);
       return;
     }
 
@@ -313,8 +322,18 @@ async function main(): Promise<void> {
     console.log(`[bank-b-proxy] EXECUTED ${execution.trace_id} — ${execution.status}`);
     res.json({ ok: true, execution });
 
-    // Automatically trigger anchoring after execution is processed
-    runAnchor(execution.trace_id);
+    pendingAnchorTraces.add(execution.trace_id);
+  });
+
+  app.post("/anchor-now", async (_req, res) => {
+    const traces = [...pendingAnchorTraces];
+    pendingAnchorTraces.clear();
+    res.json({ ok: true, queued: traces.length });
+    if (traces.length > 0) {
+      await runAnchor(traces);
+    } else {
+      console.log("[bank-b-proxy] /anchor-now called but no pending traces");
+    }
   });
 
   app.listen(PORT, () => console.log(`TrustAgentAI Proxy B listening on :${PORT}`));

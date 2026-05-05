@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { useSSE } from "../hooks/useSSE";
+import { useSSEMulti } from "../hooks/useSSEMulti";
 import type { HandshakeEvent, AnchorEvent } from "../types";
 
 const PROXY_A = import.meta.env.VITE_PROXY_A_URL ?? "http://localhost:3001";
@@ -42,15 +42,23 @@ export function HandshakeVisualizer({
 }) {
   const [running, setRunning] = useState(false);
 
-  const demoRaw = useSSE(`${PROXY_A}/events`, "demo-triggered", resetToken);
-  const execARaw = useSSE(`${PROXY_A}/events`, "execution-complete", resetToken);
-  const execBRaw = useSSE(`${PROXY_B}/events`, "execution-complete", resetToken);
-  const envelopeARaw = useSSE(`${PROXY_A}/events`, "envelope", resetToken);
-  const anchorPendingRaw = useSSE(`${PROXY_B}/events`, "anchor-pending", resetToken);
-  const anchorCompleteRaw = useSSE(`${PROXY_B}/events`, "anchor-complete", resetToken);
-  const anchorFailedRaw = useSSE(`${PROXY_B}/events`, "anchor-failed", resetToken);
-  const acceptedRaw = useSSE(`${PROXY_B}/events`, "intent-accepted", resetToken);
-  const rejectedRaw = useSSE(`${PROXY_B}/events`, "intent-rejected", resetToken);
+  const proxyA = useSSEMulti(`${PROXY_A}/events`, [
+    "demo-triggered", "execution-complete", "envelope",
+  ] as const, resetToken);
+  const proxyB = useSSEMulti(`${PROXY_B}/events`, [
+    "execution-complete", "anchor-pending", "anchor-complete",
+    "anchor-failed", "intent-accepted", "intent-rejected",
+  ] as const, resetToken);
+
+  const demoRaw          = proxyA["demo-triggered"]    ?? [];
+  const execARaw         = proxyA["execution-complete"] ?? [];
+  const envelopeARaw     = proxyA["envelope"]           ?? [];
+  const execBRaw         = proxyB["execution-complete"] ?? [];
+  const anchorPendingRaw = proxyB["anchor-pending"]     ?? [];
+  const anchorCompleteRaw= proxyB["anchor-complete"]    ?? [];
+  const anchorFailedRaw  = proxyB["anchor-failed"]      ?? [];
+  const acceptedRaw      = proxyB["intent-accepted"]    ?? [];
+  const rejectedRaw      = proxyB["intent-rejected"]    ?? [];
 
   useEffect(() => {
     if (demoRaw.length > 0) setRunning(true);
@@ -59,10 +67,10 @@ export function HandshakeVisualizer({
   const traces = useMemo<Trace[]>(() => {
     const map = new Map<string, Trace>();
 
-    const addOrGet = (traceId: string, tool: string, cost: number): Trace => {
+    const addOrGet = (traceId: string, tool?: string, cost?: number): Trace => {
       let t = map.get(traceId);
       if (!t) {
-        t = { traceId, tool, cost, steps: [] };
+        t = { traceId, tool: tool ?? "", cost: cost ?? 0, steps: [] };
         map.set(traceId, t);
       } else {
         if (!t.tool && tool) t.tool = tool;
@@ -71,80 +79,76 @@ export function HandshakeVisualizer({
       return t;
     };
 
-    // 1. Process intents (Accepted or Rejected)
+    // 1. Process intents (Accepted or Rejected) from Bank-B SSE
     parseAll(acceptedRaw).forEach((e) => {
       if (!e.traceId) return;
-      const t = addOrGet(e.traceId, e.tool ?? "", e.cost ?? 0);
-      t.steps.push({ label: "INTENT → PROXY-B", ok: true });
-      t.steps.push({ label: "ACCEPTED ✓", ok: true });
+      const t = addOrGet(e.traceId, e.tool, e.cost);
+      t.steps.push({ label: "ACCEPTED (B) ✓", ok: true });
     });
 
     parseAll(rejectedRaw).forEach((e) => {
       if (!e.traceId) return;
-      const t = addOrGet(e.traceId, e.tool ?? "", e.cost ?? 0);
-      t.steps.push({ label: "INTENT → PROXY-B", ok: true });
-      t.steps.push({ label: `REJECTED — ${e.reason ?? "ERR_BUDGET"}`, ok: false });
+      const t = addOrGet(e.traceId, e.tool, e.cost);
+      t.steps.push({ label: `REJECTED (B) — ${e.reason || "ERR"}`, ok: false });
     });
 
-    // 2. Process executions
+    // 2. Process envelope events from Bank-A (INTENT, ACCEPTANCE, EXECUTION, PROVENANCE)
+    parseAll(envelopeARaw).forEach((e: any) => {
+      if (!e.traceId) return;
+      const t = addOrGet(e.traceId, e.tool, e.cost);
+      if (e.type === "INTENT") {
+        t.steps.unshift({ label: "INTENT (A→B) ✓", ok: true });
+      } else if (e.type === "ACCEPTANCE") {
+        t.steps.push({ label: "ACCEPTANCE (A) ✓", ok: true });
+      } else if (e.type === "PROVENANCE") {
+        t.steps.push({ label: "PROVENANCE (A) ✓", ok: true });
+      }
+    });
+
+    // 3. Process executions (Bilateral)
     parseAll(execARaw).forEach((e) => {
       if (!e.traceId) return;
-      const t = addOrGet(e.traceId, e.tool ?? "", e.cost ?? 0);
-      t.steps.push({
-        label: e.status === "COMPLETED" ? "EXECUTED (A) ✓" : "FAILED (A)",
-        ok: e.status === "COMPLETED",
-      });
+      const t = addOrGet(e.traceId, e.tool, e.cost);
+      t.steps.push({ label: "EXECUTED (A) ✓", ok: e.status === "COMPLETED" });
     });
 
     parseAll(execBRaw).forEach((e) => {
       if (!e.traceId) return;
-      const t = addOrGet(e.traceId, e.tool ?? "", e.cost ?? 0);
-      t.steps.push({
-        label: e.status === "COMPLETED" ? "EXECUTED (B) ✓" : "FAILED (B)",
-        ok: e.status === "COMPLETED",
-      });
-    });
-
-    // 3. Process Provenance (Bank-A)
-    parseAll(envelopeARaw).forEach((e: any) => {
-      if (e.type === "PROVENANCE") {
-        const t = map.get(e.traceId);
-        if (t) t.steps.push({ label: "PROVENANCE ✓", ok: true });
-      }
+      const t = addOrGet(e.traceId);
+      t.steps.push({ label: "EXECUTED (B) ✓", ok: e.status === "COMPLETED" });
     });
 
     // 4. Process Anchoring (Bank-B)
     parseAnchors(anchorPendingRaw).forEach((e) => {
-      const t = map.get(e.traceId);
-      if (!t) return;
-      if (!t.steps.some((s) => s.label === "ANCHORING ⏳" || s.basescanUrl)) {
-        t.steps.push({ label: "ANCHORING ⏳", ok: true, pending: true });
+      if (!e.traceId) return;
+      const t = addOrGet(e.traceId);
+      if (!t.steps.some(s => s.pending || s.basescanUrl)) {
+        t.steps.push({ label: "ANCHORING (B) ⏳", ok: true, pending: true });
       }
     });
 
     parseAnchors(anchorCompleteRaw).forEach((e) => {
-      const t = map.get(e.traceId);
-      if (!t) return;
-      // Replace pending/existing anchor steps
-      t.steps = t.steps.filter((s) => !s.pending && !s.label.startsWith("ANCHOR"));
+      if (!e.traceId) return;
+      const t = addOrGet(e.traceId);
+      t.steps = t.steps.filter(s => !s.pending && !s.label.startsWith("ANCHOR"));
       t.steps.push({
-        label: `ANCHORED ⛓ block ${e.blockNumber || "..."}`,
+        label: `ANCHORED (B) ⛓ block ${e.blockNumber || ""}`,
         ok: true,
-        basescanUrl: e.basescanUrl,
+        basescanUrl: e.basescanUrl
       });
     });
 
     parseAnchors(anchorFailedRaw).forEach((e: any) => {
-      const t = map.get(e.traceId);
-      if (!t) return;
-      t.steps = t.steps.filter((s) => !s.pending);
-      t.steps.push({ label: `ANCHOR FAILED ✗`, ok: false });
+      if (!e.traceId) return;
+      const t = addOrGet(e.traceId);
+      t.steps = t.steps.filter(s => !s.pending);
+      t.steps.push({ label: "ANCHOR FAILED (B) ✗", ok: false });
     });
 
-    return Array.from(map.values()).sort((a, b) => a.traceId.localeCompare(b.traceId));
+    return Array.from(map.values());
   }, [acceptedRaw, rejectedRaw, execARaw, execBRaw, envelopeARaw, anchorPendingRaw, anchorCompleteRaw, anchorFailedRaw]);
 
-  const demoComplete = traces.length >= 3 || (execARaw.length > 0 && rejectedRaw.length > 0);
+  const demoComplete = traces.length >= 2;
 
   const trigger = () => {
     fetch(`${PROXY_A}/trigger`, { method: "POST" });
