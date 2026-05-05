@@ -57,14 +57,26 @@ function EnvelopeRow({ env }: { env: Envelope }) {
 function DisputePackView({ proxyBUrl, resetToken }: { proxyBUrl: string; resetToken: number }) {
   const envA = useEnvelopes(PROXY_A, resetToken);
   const envB = useEnvelopes(proxyBUrl, resetToken);
+
+  // Descending: newest first (envA/envB are ASC from DB, reverse preserves Set uniqueness)
   const traceIds = useMemo(() => {
-    return [...new Set([...envA, ...envB].map((e) => e.trace_id.replace(/^urn:uuid:/, "")))];
+    const ordered = [...new Set([...envA, ...envB].map((e) => e.trace_id.replace(/^urn:uuid:/, "")))];
+    return ordered.reverse();
   }, [envA, envB]);
+
+  const [filter, setFilter] = useState("");
   const [selectedTrace, setSelectedTrace] = useState("");
   const [pack, setPack] = useState<DisputePack | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => { setSelectedTrace(""); setPack(null); }, [resetToken]);
+  const filteredIds = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return q ? traceIds.filter((id) => id.toLowerCase().includes(q)) : traceIds;
+  }, [traceIds, filter]);
+
+  useEffect(() => { setFilter(""); setSelectedTrace(""); setPack(null); }, [resetToken]);
+
+  const select = (id: string) => { setFilter(id); setSelectedTrace(id); setPack(null); };
 
   const fetchPack = async (id: string) => {
     if (!id) return;
@@ -81,35 +93,66 @@ function DisputePackView({ proxyBUrl, resetToken }: { proxyBUrl: string; resetTo
     await fetchPack(selectedTrace);
   };
 
+  const canLoad = !!selectedTrace && !loading;
+
   return (
     <div style={{ padding: "8px 10px", height: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-        <select
-          value={selectedTrace}
-          onChange={(e) => { setSelectedTrace(e.target.value); setPack(null); }}
-          style={{
-            flex: 1, background: "#111", color: "#ccc", border: "1px solid #333",
-            borderRadius: 3, padding: "3px 6px", fontFamily: "inherit", fontSize: 11,
-          }}
-        >
-          <option value="">Select trace ID…</option>
-          {traceIds.map((id) => (
-            <option key={id} value={id}>
-              {id}
-            </option>
-          ))}
-        </select>
-        <button onClick={() => fetchPack(selectedTrace)} disabled={!selectedTrace || loading}
-          style={{ padding: "3px 8px", background: "#1a2a3a", border: "1px solid #7bb3ff", borderRadius: 3, color: "#7bb3ff", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}>
+      {/* Filter input */}
+      <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+          <input
+            value={filter}
+            onChange={(e) => { setFilter(e.target.value); setSelectedTrace(""); setPack(null); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && filteredIds.length === 1) select(filteredIds[0]); }}
+            placeholder="Filter by any part of trace ID…"
+            style={{
+              width: "100%", background: "#111", color: "#ccc", border: "1px solid #333",
+              borderRadius: 3, padding: "3px 6px", fontFamily: "monospace", fontSize: 10,
+              outline: "none", boxSizing: "border-box",
+            }}
+          />
+          {/* Filtered list */}
+          {filter && !selectedTrace && filteredIds.length > 0 && (
+            <div style={{
+              background: "#0d0d0d", border: "1px solid #333", borderRadius: 3,
+              maxHeight: 120, overflowY: "auto",
+            }}>
+              {filteredIds.map((id) => (
+                <div
+                  key={id}
+                  onClick={() => select(id)}
+                  style={{
+                    padding: "3px 6px", cursor: "pointer", fontFamily: "monospace",
+                    fontSize: 10, color: "#7bb3ff",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#1a2a3a")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  {id}
+                </div>
+              ))}
+            </div>
+          )}
+          {filter && !selectedTrace && filteredIds.length === 0 && (
+            <div style={{ color: "#444", fontSize: 10, paddingLeft: 2 }}>No match</div>
+          )}
+        </div>
+        <button onClick={() => fetchPack(selectedTrace)} disabled={!canLoad}
+          style={{ padding: "3px 8px", background: "#1a2a3a", border: "1px solid #7bb3ff", borderRadius: 3, color: "#7bb3ff", cursor: canLoad ? "pointer" : "default", fontFamily: "inherit", fontSize: 11, opacity: canLoad ? 1 : 0.4 }}>
           Load
         </button>
-        <button onClick={flushAndFetch} disabled={!selectedTrace || loading}
-          style={{ padding: "3px 8px", background: "#1a1a2a", border: "1px solid #a78bfa", borderRadius: 3, color: "#a78bfa", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}
+        <button onClick={flushAndFetch} disabled={!canLoad}
+          style={{ padding: "3px 8px", background: "#1a1a2a", border: "1px solid #a78bfa", borderRadius: 3, color: "#a78bfa", cursor: canLoad ? "pointer" : "default", fontFamily: "inherit", fontSize: 11, opacity: canLoad ? 1 : 0.4 }}
           title="Flush Merkle batch then load dispute pack">
-          Flush + Load
+          Flush+Load
         </button>
       </div>
-      {!selectedTrace && <div style={{ color: "#444", fontSize: 11 }}>Select a trace ID to view its Dispute Pack.</div>}
+
+      {!selectedTrace && !filter && (
+        <div style={{ color: "#444", fontSize: 11 }}>
+          {traceIds.length} trace(s) — newest first. Type to filter.
+        </div>
+      )}
       {loading && <div style={{ color: "#666", fontSize: 11 }}>Loading…</div>}
       {pack && (
         <pre style={{
