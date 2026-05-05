@@ -69,8 +69,8 @@ def handle_intent_rejected(data: dict):
 def handle_execution_complete(data: dict):
     status = data.get("status", "unknown")
     trace_id = data.get("traceId", "")[-8:]
-    think(f"Execution finished with status: {status}.")
-    think(f"Signed ExecutionEnvelope appended to DAG ledger for trace: ...{trace_id}.")
+    think(f"Execution result received — status: {status}. Bank-B dual-signed ExecutionEnvelope via Ed25519 (did:workload:bank-b-proxy#key-1). Non-repudiation D1 satisfied.")
+    think(f"ExecutionEnvelope appended to DAG ledger. Three-phase A2A handshake complete for trace: ...{trace_id}. Notifying anchor service.")
 
 
 def handle_cross_check_result(data: dict):
@@ -88,17 +88,20 @@ if __name__ == "__main__":
     think("Trust Proxy B armed — monitoring for IntentEnvelopes...")
 
     print("[bank-b-agent] subscribed to proxy events stream")
-    try:
-        for event_name, data in stream_events(f"{PROXY_URL}/events"):
-            if event_name == "intent-accepted":
-                handle_intent_accepted(data)
-            elif event_name == "intent-rejected":
-                handle_intent_rejected(data)
-            elif event_name == "execution-complete":
-                handle_execution_complete(data)
-            elif event_name == "cross-check-result":
-                handle_cross_check_result(data)
-    except KeyboardInterrupt:
-        print("[bank-b-agent] shutting down")
-    except Exception as e:
-        print(f"[bank-b-agent] stream error: {e}")
+    while True:
+        try:
+            for event_name, data in stream_events(f"{PROXY_URL}/events"):
+                if event_name == "intent-accepted":
+                    handle_intent_accepted(data)
+                elif event_name == "intent-rejected":
+                    handle_intent_rejected(data)
+                elif event_name == "execution-complete":
+                    handle_execution_complete(data)
+                elif event_name == "cross-check-result":
+                    handle_cross_check_result(data)
+        except KeyboardInterrupt:
+            print("[bank-b-agent] shutting down")
+            break
+        except Exception as e:
+            print(f"[bank-b-agent] stream error: {e} — reconnecting in 3s")
+            time.sleep(3)

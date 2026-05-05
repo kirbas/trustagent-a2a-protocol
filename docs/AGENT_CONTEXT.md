@@ -33,7 +33,7 @@ Trust-Agent/
 │   ├── proxy/
 │   │   ├── src/
 │   │   │   ├── server.ts          Express app: /invoke /trigger /trigger-done /reset /thought /events /envelopes /cross-check /health
-│   │   │   ├── db.ts              better-sqlite3: 4-table schema (envelopes, ledger_chain, risk_budgets, provenance), saveEnvelope(), getEnvelopesByTraceId(), clearEnvelopes()
+│   │   │   ├── db.ts              better-sqlite3: 2-table schema (envelopes, provenance), saveEnvelope(), getEnvelopesByTraceId(), clearEnvelopes()
 │   │   │   ├── sse.ts             SseBus: addClient(res), broadcast(event, data)
 │   │   │   └── key-exchange.ts    registerWithProxyB() retry loop (25× @ 1s)
 │   │   ├── package.json           ESM, file: dep on trust-agent
@@ -60,8 +60,7 @@ Trust-Agent/
 ├── Bank-B/
 │   ├── proxy/
 │   │   ├── src/
-│   │   │   ├── server.ts          Express app: /accept /executed /register-peer-key /reset /thought /events /envelopes /dispute/:id /flush /health /anchor /envelopes-by-trace/:traceId /verify/:txHash
-│   │   │   ├── db.ts              6-table schema (envelopes, ledger_chain, risk_budgets, provenance, anchors, anchor_leaves), /data/bank-b.db, clearEnvelopes(), getEnvelopesByTraceId()
+│   │   │   ├── db.ts              better-sqlite3: 3-table schema (envelopes, anchors, anchor_leaves), /data/bank-b.db, clearEnvelopes(), getEnvelopesByTraceId()
 │   │   │   └── sse.ts             identical SseBus
 │   │   ├── package.json
 │   │   ├── tsconfig.json
@@ -117,9 +116,15 @@ Trust-Agent/
 
 3. **`rootDir: "src"` in proxy tsconfigs** ensures TypeScript outputs to `dist/server.js` (not `dist/src/server.js`). The Dockerfiles use `CMD ["node", "dist/server.js"]`.
 
-4. **`spec_version: "0.5"`** in all envelopes. The library hardcodes this.
+4. **JCS Canonicalization (RFC 8785)**: All hashes (content hashes, node hashes) MUST use JCS canonicalization via `sha256Json` to ensure reproducibility cross-platform. Do not use `JSON.stringify`.
 
-5. **DID alignment**: `ProxyBGateway` validates the intent signature using `proxyAPublicKeys.get(sig.kid)`. The `kid` in the signature comes from Bank-A proxy's `KeyPair.kid = "did:workload:bank-a-proxy#key-1"`. The `RiskBudgetEngine` policy is keyed on `intent.initiator.did = "did:workload:bank-a-agent"`. These two values are different and must stay consistent.
+5. **`spec_version: "0.5"`** in all envelopes. The library hardcodes this.
+
+5. **D1 Non-repudiation (Dual-Signing)**: Bank-B dual-signs the `ExecutionEnvelope` in the `/executed` handler before persistence. This ensures that the execution outcome is cryptographically binding for both parties.
+
+6. **SSE Resiliency**: The Bank-B agent uses a `while True` loop with a 3s backoff to ensure the SSE connection is restored if the proxy restarts or the network drops.
+
+7. **DID alignment**: `ProxyBGateway` validates the intent signature using `proxyAPublicKeys.get(sig.kid)`. The `kid` in the signature comes from Bank-A proxy's `KeyPair.kid = "did:workload:bank-a-proxy#key-1"`. The `RiskBudgetEngine` policy is keyed on `intent.initiator.did = "did:workload:bank-a-agent"`. These two values are different and must stay consistent.
 
 6. **Reject events come from Bank-B**, not Bank-A. When a budget check fails, Bank-B's `/accept` broadcasts `intent-rejected` with the real `trace_id`. Bank-A's `/invoke` does NOT broadcast an additional `execution-complete` for rejected intents. Do not add one.
 
@@ -228,6 +233,8 @@ if (result.error) {
    e. `POST /trigger-done` → sets `triggered = false` on the proxy
    f. Go back to (a) and wait for the next button press
 
+The agent uses **reasoning-forward** logic: thoughts should focus on internal invariants and cryptographic expectations.
+
 `POST /trigger-done` resets only the `triggered` flag without touching the DB. `POST /reset` (called by the UI's "↺ Clear" button) also clears the DB and broadcasts `demo-reset`.
 
 `think(text)` = `POST /thought { text }` + `sleep(1.2)` to pace the UI.
@@ -235,9 +242,10 @@ if (result.error) {
 **`Bank-B/agent/agent.py`** — long-running:
 1. Poll `GET /health` until ready
 2. Emit 3 initial "vendor ready" thoughts
-3. Stream `GET /events` forever, parsing `event:` / `data:` lines
+3. Stream `GET /events` forever (wrapped in a `while True` reconnection loop)
 4. On `intent-accepted`: emit 4 vendor thoughts
 5. On `intent-rejected`: emit 2 vendor thoughts
+6. On `execution-complete`: emit thoughts verifying **D1 Non-repudiation** (dual-signing)
 
 ---
 

@@ -42,8 +42,8 @@ class AccountingAgent:
         pending = AnchorRecord(batch_id=batch_id, merkle_root=merkle_root, status="PENDING")
         self._db.save_anchor(pending)
 
-        self._log("Proxy B: Action executed. Signing result and initiating Merkle anchor for dispute-grade proof.")
-        self._log("Broadcasting anchor to Base Sepolia (chain 84532)...")
+        self._log(f"Ed25519-signed envelopes collected. Building SHA-256 Merkle tree over {len(envelopes)} signatures for dispute-grade inclusion proofs.")
+        self._log("Broadcasting 0-ETH self-transaction with Merkle root to Base Sepolia (chain 84532)...")
 
         try:
             result = self._notary.anchor(merkle_root)
@@ -61,24 +61,17 @@ class AccountingAgent:
         ))
         self._db.save_anchor_leaves(batch_id, envelopes, leaves)
 
-        # Local proof integrity check
         all_valid = all(
             verify_proof(leaf["leaf_hash"], leaf["proof_path"], merkle_root)
             for leaf in leaves
         )
-        self._log(f"Local proof verification: all_valid={all_valid}")
 
         self._log(
-            f"Verification successful. The local state is now anchored to Base Sepolia at block {result['block_number']}."
+            f"Anchor confirmed at block {result['block_number']}. All {len(envelopes)} envelopes cryptographically bound to L2. Local proof re-verified: all_valid={all_valid}."
         )
 
         vc_link = BASESCAN_TX_URL.format(tx_hash=result["tx_hash"])
         self._log(f"VC Pitch Link → {vc_link}")
-
-        # Update ledger_chain table if needed (using the payload_hash from the envelope, which is the trace_id in our schema)
-        for env in envelopes:
-             self._db.update_ledger_chain(env.payload_hash, result["tx_hash"])
-
 
         return {
             "status": "success",

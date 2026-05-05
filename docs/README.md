@@ -60,7 +60,7 @@ Docker builds from scratch take ~4 minutes (compiling native `better-sqlite3`). 
 ## Frontend Panels
 
 ### Agent Thought Stream (left)
-Live interleaved thought logs from both agents, color-coded by node (green = Bank-A, orange = Bank-B). Auto-scrolls to bottom.
+Live interleaved thought logs from both agents, color-coded by node (green = Bank-A, orange = Bank-B). The agent logic is **reasoning-forward**: surfacing internal verifications and cryptographic expectations rather than just narrating actions. Auto-scrolls to bottom.
 
 ### Bilateral Handshake (centre)
 Step timeline per `trace_id`. Each trace shows its steps as badges:
