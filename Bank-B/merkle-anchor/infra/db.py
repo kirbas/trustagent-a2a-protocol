@@ -1,37 +1,32 @@
-import hashlib
 import json
 import sqlite3
-import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 from domain.models import AnchorRecord, Envelope
 
-ENVELOPE_TYPES = ["INTENT", "ACCEPTANCE", "EXECUTION", "PROVENANCE"]
-
 
 class SQLiteRepository:
+    """
+    Reads from Bank-B proxy's SQLite database (shared via Docker volume).
+    The 'envelopes' table is populated by the Bank-B TypeScript proxy.
+    This service adds 'anchors' and 'anchor_leaves' tables for chain anchoring.
+    """
+
     def __init__(self, db_path: str) -> None:
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
-        self.init_schema()
+        self._init_anchor_schema()
 
-    def init_schema(self) -> None:
+    def _init_anchor_schema(self) -> None:
+        """Create anchor-specific tables (envelopes table is managed by TS proxy)."""
         self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS envelopes (
-                id           TEXT PRIMARY KEY,
-                type         TEXT NOT NULL,
-                signature    TEXT NOT NULL,
-                payload_hash TEXT NOT NULL,
-                timestamp    TEXT NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS anchors (
                 batch_id     TEXT PRIMARY KEY,
                 merkle_root  TEXT NOT NULL,
                 tx_hash      TEXT,
                 block_number INTEGER,
-                status       TEXT NOT NULL DEFAULT 'PENDING'
+                status       TEXT NOT NULL DEFAULT 'PENDING',
+                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS anchor_leaves (
@@ -45,40 +40,38 @@ class SQLiteRepository:
         """)
         self._conn.commit()
 
-    def seed_mock_envelopes(self, count: int = 10) -> None:
-        existing = self._conn.execute("SELECT COUNT(*) FROM envelopes").fetchone()[0]
-        if existing >= count:
-            return
+    # ── Read envelopes (populated by Bank-B TS proxy) ──────────────────────
 
-        rows = []
-        for i in range(count):
-            env_id = str(uuid.uuid4())
-            env_type = ENVELOPE_TYPES[i % len(ENVELOPE_TYPES)]
-            sig_seed = f"mock-sig-{i}-{env_id}"
-            signature = hashlib.sha256(sig_seed.encode()).hexdigest() * 2
-            payload = f"mock-payload-{i}-{env_id}"
-            payload_hash = hashlib.sha256(payload.encode()).hexdigest()
-            timestamp = datetime.now(timezone.utc).isoformat()
-            rows.append((env_id, env_type, signature, payload_hash, timestamp))
-
-        self._conn.executemany(
-            "INSERT OR IGNORE INTO envelopes (id, type, signature, payload_hash, timestamp) VALUES (?,?,?,?,?)",
-            rows,
-        )
-        self._conn.commit()
-
-    def get_recent_envelopes(self, limit: int = 10) -> list[Envelope]:
+    def get_unanchored_envelopes(self, limit: int = 50) -> list[Envelope]:
+        """
+        Get envelopes that haven't yet been included in an anchor batch.
+        Excludes envelope IDs already present in anchor_leaves.
+        """
         rows = self._conn.execute(
-            "SELECT id, type, signature, payload_hash, timestamp FROM envelopes ORDER BY timestamp DESC LIMIT ?",
+            """SELECT e.id, e.type, e.signature, e.trace_id AS payload_hash, e.created_at AS timestamp
+               FROM envelopes e
+               WHERE e.id NOT IN (SELECT envelope_id FROM anchor_leaves)
+               ORDER BY e.created_at ASC
+               LIMIT ?""",
             (limit,),
         ).fetchall()
-        return [Envelope(**dict(row)) for row in rows]
+        return [Envelope(
+            id=row["id"],
+            type=row["type"],
+            signature=row["signature"],
+            payload_hash=row["payload_hash"],
+            timestamp=row["timestamp"],
+        ) for row in rows]
+
+    # ── Anchor CRUD ────────────────────────────────────────────────────────
 
     def save_anchor(self, record: AnchorRecord) -> None:
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self._conn.execute(
-            """INSERT OR REPLACE INTO anchors (batch_id, merkle_root, tx_hash, block_number, status)
-               VALUES (?, ?, ?, ?, ?)""",
-            (record.batch_id, record.merkle_root, record.tx_hash, record.block_number, record.status),
+            """INSERT OR REPLACE INTO anchors (batch_id, merkle_root, tx_hash, block_number, status, created_at)
+               VALUES (?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM anchors WHERE batch_id = ?), ?))""",
+            (record.batch_id, record.merkle_root, record.tx_hash, record.block_number, record.status, record.batch_id, now),
         )
         self._conn.commit()
 
@@ -93,6 +86,15 @@ class SQLiteRepository:
         self._conn.executemany(
             "INSERT OR IGNORE INTO anchor_leaves (batch_id, leaf_index, envelope_id, leaf_hash, proof_path) VALUES (?,?,?,?,?)",
             rows,
+        )
+        self._conn.commit()
+
+    def update_ledger_chain(self, trace_id: str, on_chain_tx_id: str) -> None:
+        """Store on-chain tx reference in ledger_chain table."""
+        self._conn.execute(
+            """UPDATE ledger_chain SET on_chain_tx_id = ?
+               WHERE trace_id = ? AND on_chain_tx_id IS NULL""",
+            (on_chain_tx_id, trace_id),
         )
         self._conn.commit()
 
@@ -113,7 +115,7 @@ class SQLiteRepository:
     def get_leaves_for_batch(self, batch_id: str) -> list[dict]:
         rows = self._conn.execute(
             """SELECT al.leaf_index, al.envelope_id, al.leaf_hash, al.proof_path,
-                      e.type AS envelope_type, e.timestamp
+                      e.type AS envelope_type, e.created_at AS timestamp
                FROM anchor_leaves al
                LEFT JOIN envelopes e ON e.id = al.envelope_id
                WHERE al.batch_id = ?

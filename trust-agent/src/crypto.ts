@@ -8,7 +8,8 @@
  */
 
 import * as ed from "@noble/ed25519";
-import canonicalize from "canonicalize";
+import _canonicalize = require("canonicalize");
+const canonicalize = (_canonicalize.default ?? _canonicalize) as (input: unknown) => string | undefined;
 import { createHash, randomBytes } from "crypto";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -45,7 +46,7 @@ export async function generateKeyPair(kid: string): Promise<KeyPair> {
 export function computeEnvelopeHash(envelope: Record<string, unknown>): string {
   // Strip signatures field before hashing (spec requirement)
   const { signatures: _sig, entry_hash: _eh, ...rest } = envelope as any;
-  const canonical = JSON.stringify(rest);
+  const canonical = canonicalize(rest);
   if (!canonical) throw new Error("JCS canonicalization failed");
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -54,7 +55,7 @@ export function computeEnvelopeHash(envelope: Record<string, unknown>): string {
  * Generic SHA-256 of any JSON-serializable value (JCS).
  */
 export function sha256Json(value: unknown): string {
-  const canonical = JSON.stringify(value);
+  const canonical = canonicalize(value);
   if (!canonical) throw new Error("JCS canonicalization failed");
   return createHash("sha256").update(canonical).digest("hex");
 }

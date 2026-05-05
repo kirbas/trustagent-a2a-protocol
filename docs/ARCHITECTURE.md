@@ -12,30 +12,35 @@
 │  │              │ ──────────────────► │   ProxyAGateway wrapper  │ │
 │  │  Scenarios:  │                     │   SQLite: bank-a.db      │ │
 │  │  · $5k OK    │                     │   SSE broadcast bus      │ │
-│  │  · $50k DENY │                     └────────────┬─────────────┘ │
-│  └──────────────┘                                  │               │
+│  │  · $50k DENY │                     │   POST /cross-check      │ │
+│  └──────────────┘                     └────────────┬─────────────┘ │
+│                                                    │               │
 │                                           POST /accept             │
 │                                           POST /executed           │
 │                                           POST /register-peer-key  │
+│                                           GET /envelopes-by-trace  │
 │                                                    │               │
 │  ┌──────────────┐    SSE /events      ┌────────────▼─────────────┐ │
-│  │ bank-b-agent │ ◄──────────────────  │      bank-b-proxy        │ │
+│  │ bank-b-agent │ ◄────────────────── │      bank-b-proxy        │ │
 │  │   (Python)   │    POST /thought    │   (TypeScript/Express)   │ │
 │  │              │ ──────────────────► │   ProxyBGateway wrapper  │ │
 │  │  Reacts to:  │                     │   SQLite: bank-b.db      │ │
 │  │  · accepted  │                     │   DAGLedger (in-memory)  │ │
 │  │  · rejected  │                     │   SSE broadcast bus      │ │
-│  └──────────────┘                     └──────────────────────────┘ │
-│                                                    ▲               │
-│  ┌──────────────────────────────────┐              │               │
-│  │           frontend               │  SSE /events (both proxies) │
-│  │       (React + nginx)            │  GET /envelopes             │
-│  │  http://localhost:3000           │  GET /dispute/:id           │
-│  │                                  │  POST /flush                │
-│  │  · ThoughtStream                 │◄────────────────────────────│
-│  │  · HandshakeVisualizer           │                             │
-│  │  · DisputeConsole (+ DisputePack)│                             │
-│  └──────────────────────────────────┘                             │
+│  │  · cross-chk │                     └────────────┬─────────────┘ │
+│  └──────────────┘                                  │               │
+│                                           POST /anchor             │
+│                                           GET /verify              │
+│                                                    ▼               │
+│  ┌──────────────────────────────────┐ ┌──────────────────────────┐ │
+│  │           frontend               │ │     bank-b-anchor        │ │
+│  │       (React + nginx)            │ │     (Python/Flask)       │ │
+│  │  http://localhost:3000           │ │     L2 Notary Service    │ │
+│  │                                  │ └──────────────────────────┘ │
+│  │  · ThoughtStream                 │              ▲               │
+│  │  · HandshakeVisualizer           │              │               │
+│  │  · DisputeConsole (+ DisputePack)│◄─────────────┘               │
+│  └──────────────────────────────────┘                              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,11 +87,12 @@ bank-a-agent          bank-a-proxy           bank-b-proxy
      │                      │◄─────────────┘       │
      │                      │                      │
      │                      │  POST /executed      │
-     │                      │  {execution}  ─ ─ ─►│ → ledger.append(EXECUTION)
+     │                      │  {execution}  ──────►│ → ledger.append(EXECUTION)
      │                      │  (fire-and-forget)   │ → saveEnvelope(EXECUTION)
      │                      │                      │ → budgetEngine.recordSpend()
      │                      │                      │ → sseBus(execution-complete)
-     │                      │
+     │                      │                      │ → runAnchor(traceId)         ← Bank-B now anchors
+     │                      │                      │
      │                      │ buildContentProvenanceReceipt()
      │                      │ saveEnvelope(INTENT, ACCEPTANCE, EXECUTION, PROVENANCE)
      │                      │ sseBus(execution-complete)
@@ -112,7 +118,7 @@ bank-a-proxy           bank-b-proxy
      │                      │ → saveEnvelope(DENIED)            ← real signed receipt
      │                      │ → sseBus(intent-rejected)
      │                      │
-     │  400 {error, code}   │
+     │  400 {error, code}   │ → runAnchor(traceId)         ← Bank-B anchors rejections too
      │◄─────────────────────│
      │
      │ returns MCP error to /invoke caller
@@ -189,6 +195,26 @@ provenance (
   receipt_sig TEXT NOT NULL,       -- JSON.stringify of CPR signatures
   created_at TEXT NOT NULL
 );
+
+-- Blockchain Merkle anchor batches (bank-b only)
+anchors (
+  batch_id TEXT PRIMARY KEY,
+  merkle_root TEXT NOT NULL,          -- 32-byte hex root (without 0x prefix)
+  tx_hash TEXT,                        -- Base Sepolia tx hash (null until CONFIRMED)
+  block_number INTEGER,                -- block confirmed at
+  status TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING | CONFIRMED
+  created_at TEXT NOT NULL
+);
+
+-- Per-leaf Merkle inclusion proofs (bank-b only)
+anchor_leaves (
+  batch_id TEXT NOT NULL,             -- FK → anchors.batch_id
+  leaf_index INTEGER NOT NULL,
+  envelope_id TEXT NOT NULL,          -- FK → envelopes.id
+  leaf_hash TEXT NOT NULL,            -- SHA-256(signature hex)
+  proof_path TEXT NOT NULL,           -- JSON: [{hash, position: "left"|"right"}, ...]
+  PRIMARY KEY (batch_id, leaf_index)
+);
 ```
 
 ---
@@ -205,7 +231,10 @@ Both proxies broadcast SSE events on `GET /events`. The frontend subscribes sepa
 | `intent-accepted` | Bank-B | `{ traceId, tool, cost, ts }` |
 | `intent-rejected` | Bank-B | `{ traceId, tool, cost, errorCode, reason, ts }` |
 | `execution-complete` | Bank-A | `{ traceId, status, tool, cost, ts }` |
-| `envelope` | Bank-A | `{ type, traceId, ts }` (lightweight, triggers refetch) |
+| `envelope` | Both | `{ type, traceId, ts }` (lightweight, triggers refetch) |
+| `anchor-pending` | Bank-B | `{ traceId, ts }` |
+| `anchor-complete` | Bank-B | `{ traceId, merkleRoot, txHash, blockNumber, basescanUrl, ts }` |
+| `cross-check-result` | Bank-B | `{ traceId, ts }` |
 
 Wire format (standard SSE):
 ```
@@ -231,6 +260,7 @@ data: {"traceId":"urn:uuid:...","tool":"get_security_report","cost":5000,"ts":".
 | GET | `/events` | SSE stream |
 | GET | `/envelopes` | All SQLite envelope rows |
 | POST | `/invoke` | Body: `{ tool, args, cost }` — runs full A2A handshake |
+| POST | `/cross-check` | Body: `{ traceId }` — performs bilateral parity check |
 
 ### Bank-B Proxy (`http://localhost:3002`)
 
@@ -242,10 +272,13 @@ data: {"traceId":"urn:uuid:...","tool":"get_security_report","cost":5000,"ts":".
 | POST | `/thought` | Body: `{ text }` — broadcasts `thought` SSE |
 | GET | `/events` | SSE stream |
 | GET | `/envelopes` | All SQLite envelope rows |
+| GET | `/envelopes-by-trace/:traceId` | Used by Bank-A to pull remote envelopes for cross-checking |
 | POST | `/accept` | Body: `{ intent: IntentEnvelope, estimated_cost_usd }` |
-| POST | `/executed` | Body: `{ execution: ExecutionEnvelope }` |
+| POST | `/executed` | Body: `{ execution: ExecutionEnvelope }` — dual-signs execution envelope |
 | GET | `/dispute/:id` | Full dispute pack (records + entries + Merkle proofs); populated for both accepted and rejected traces |
 | POST | `/flush` | Force Merkle batch commit; returns `{ batch }` |
+| POST | `/anchor` | Proxies request to L2 notary service `bank-b-anchor` |
+| GET | `/verify/:txHash` | Returns anchor dispute pack: merkle root, block, all leaves with per-leaf `proofValid` flag |
 
 ---
 
@@ -264,7 +297,14 @@ App.tsx  (3-column grid layout, owns resetToken state)
 │   ├── useSSE(PROXY_A/events, "demo-triggered",    resetToken)
 │   ├── useSSE(PROXY_A/events, "execution-complete", resetToken)
 │   ├── useSSE(PROXY_B/events, "intent-accepted",   resetToken)
-│   └── useSSE(PROXY_B/events, "intent-rejected",   resetToken)
+│   ├── useSSE(PROXY_B/events, "intent-rejected",   resetToken)
+│   ├── useSSE(PROXY_B/events, "anchor-pending",    resetToken)
+│   ├── useSSE(PROXY_B/events, "anchor-complete",   resetToken)
+│       → per-trace "ANCHORING ⏳" step → replaced by "ANCHORED ⛓ block N ↗" (BaseScan link)
+│       → bilateral execution confirmation: "EXECUTED (A) ✓" and "EXECUTED (B) ✓"
+│       → border color logic: Red (Denied) > Orange (Anchored) > Green (Success)
+│       → traceIds displayed as clean UUIDs (no "urn:uuid:" prefix)
+│       → uniform header min-height (84px) for all columns
 │       → useMemo derives Trace[] from accumulated events
 │       → "▶ Start Demo" button → POST PROXY_A/trigger (shown when !running)
 │       → "↺ Clear messages and restart demo" button
@@ -278,10 +318,23 @@ App.tsx  (3-column grid layout, owns resetToken state)
     │       → node selector (Bank-A | Bank-B)
     │       → clickable rows expand raw_payload JSON
     │       → DENIED rows highlighted red
-    └── tab: Dispute Pack
-        ├── trace selector (populated from useEnvelopes; clears on resetToken change)
-        ├── Load  → GET PROXY_B/dispute/:traceId
-        └── Flush + Load  → POST PROXY_B/flush → GET /dispute/:traceId
+    ├── tab: Dispute Pack
+    │   ├── trace selector (populated from useEnvelopes; clears on resetToken change)
+    │   ├── Load  → GET PROXY_B/dispute/:traceId
+    │   └── Flush + Load  → POST PROXY_B/flush → GET /dispute/:traceId
+    ├── tab: Anchor to L2
+    │   └── Anchor to L2 → POST PROXY_B/anchor
+    ├── tab: Verify Anchor
+    │   ├── paste tx hash input (manual, no SSE dependency)
+    │   ├── Verify → GET PROXY_B/verify/:txHash
+    │   │   → green banner if found + allValid, red if not found or proof failure
+    │   │   → leaf table: index / type / traceId snippet / ✓ or ✗ per leaf
+    │   │   → full dispute pack JSON expanded inline
+    │   └── ↓ JSON button → downloads {txHash}.json
+    └── tab: Cross-Check
+        ├── trace selector
+        ├── Cross-Check → POST PROXY_A/cross-check
+        └── Synced status and line-by-line parity table
 ```
 
 ---
@@ -309,6 +362,6 @@ Both proxy Dockerfiles use `context: .` (repo root) to access both `trust-agent/
 
 3. **Tool execution stub**: The actual tool output is a mock JSON object. In production, `executeTool` would call a real vendor API or MCP server.
 
-4. **L2 anchoring**: `ledger.flush()` commits a Merkle batch in memory. The `anchored_at` field remains null (real Base/Arbitrum anchoring is a v0.5+ roadmap item).
+4. **Blockchain anchoring requires env vars**: `RPC_URL` and `PRIVATE_KEY` must be set in `.env` for `bank-b-anchor` to successfully broadcast transactions. If unset, anchoring fails.
 
 5. **Budget not persisted**: Risk budget `current_spend` lives in `RiskBudgetEngine` in-memory only. SQLite `risk_budgets` table exists for schema completeness but is not populated in this demo.

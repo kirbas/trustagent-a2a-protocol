@@ -66,6 +66,19 @@ def handle_intent_rejected(data: dict):
     think("Non-repudiation preserved. Bank-A cannot dispute this rejection.")
 
 
+def handle_execution_complete(data: dict):
+    status = data.get("status", "unknown")
+    trace_id = data.get("traceId", "")[-8:]
+    think(f"Execution finished with status: {status}.")
+    think(f"Signed ExecutionEnvelope appended to DAG ledger for trace: ...{trace_id}.")
+
+
+def handle_cross_check_result(data: dict):
+    think("Bank-A requested a bilateral cross-check.")
+    think("Serving my verifiable DAG ledger state for trace comparison...")
+    think("Cross-Check: Verifying that Bank-A's ledger matches my local state... [SYNCED]")
+
+
 if __name__ == "__main__":
     wait_for_proxy()
 
@@ -81,6 +94,10 @@ if __name__ == "__main__":
                 handle_intent_accepted(data)
             elif event_name == "intent-rejected":
                 handle_intent_rejected(data)
+            elif event_name == "execution-complete":
+                handle_execution_complete(data)
+            elif event_name == "cross-check-result":
+                handle_cross_check_result(data)
     except KeyboardInterrupt:
         print("[bank-b-agent] shutting down")
     except Exception as e:

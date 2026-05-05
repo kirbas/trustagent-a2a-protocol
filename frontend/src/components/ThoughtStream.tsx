@@ -34,6 +34,10 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
           fontSize: 12,
           letterSpacing: 1,
           textTransform: "uppercase",
+          minHeight: 84,
+          display: "flex",
+          alignItems: "center",
+          boxSizing: "border-box",
         }}
       >
         Agent Thought Stream
