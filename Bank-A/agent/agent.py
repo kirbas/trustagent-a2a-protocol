@@ -68,40 +68,41 @@ def invoke(tool: str, args: dict, cost: float) -> dict:
 
 
 def scenario_success():
-    think("Initiating procurement workflow — Q4 compliance requires a Security Report.")
-    think("Selecting vendor: bank-b-node. Estimated cost: $5,000.")
-    think("Building signed IntentEnvelope. Sending to Vendor's Trust Proxy...")
+    think("Q4 compliance audit requires security posture report from Bank-B node. Cost within $10k single-action cap — proceeding.")
+    think("Generating Ed25519 nonce. Building IntentEnvelope (TTL=60s). Forwarding to Bank-B Trust Proxy for policy validation...")
 
     result = invoke("get_security_report", {"target": "bank-b", "format": "PDF", "classification": "CONFIDENTIAL"}, 5000)
 
-    if result.get("error"):
-        think(f"Unexpected error: {result['error'].get('message')}")
+    err = result.get("error")
+    if err:
+        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        think(f"Unexpected error from proxy: {msg}")
         return
 
     a2a = result.get("result", {}).get("_a2a", {})
     trace_id = a2a.get("execution_envelope", {}).get("trace_id", "unknown")
 
-    think("AcceptanceReceipt received and signature verified.")
-    think("Tool execution completed. ContentProvenanceReceipt generated.")
-    think(f"Handshake complete. trace_id: ...{trace_id[-12:] if len(trace_id) > 12 else trace_id}")
+    think("Bank-B AcceptanceReceipt received. Ed25519 signature verified against registered peer key. Intent hash matches.")
+    think("Execution confirmed. JCS-canonical SHA-256 content hash computed. ContentProvenanceReceipt bound to trace.")
+    think(f"Three-phase A2A protocol satisfied: Intent→Acceptance→Execution. Audit artifacts non-repudiable. trace=...{trace_id[-12:] if len(trace_id) > 12 else trace_id}")
     print(f"[bank-a-agent] SUCCESS — trace_id={trace_id}")
 
 
 def scenario_breach():
-    think("Autonomous process: evaluating bulk procurement opportunity.")
-    think("Risk model flags high ROI on bulk acquisition — initiating $50,000 wire transfer.")
-    think("Sending IntentEnvelope to Vendor Trust Proxy. Estimated cost: $50,000...")
+    think("Autonomous process: bulk acquisition model shows high ROI. Evaluating $50,000 wire transfer to external counterparty.")
+    think("$50,000 exceeds Bank-B AgentPolicy single-action cap ($10,000). Forwarding to Vendor Trust Proxy — expecting ERR_BUDGET_EXCEEDED.")
 
     result = invoke("execute_wire_transfer", {"amount": 50000, "to": "external-acct-99", "memo": "BULK-PROCUREMENT"}, 50000)
 
-    if result.get("error"):
-        code = result["error"].get("code")
-        msg = result["error"].get("message", "")
-        think(f"BLOCKED by Trust Proxy — code {code}: {msg}")
-        think("Signed DENY entry recorded in tamper-evident ledger. Non-repudiation preserved.")
+    err = result.get("error")
+    if err:
+        code = err.get("code") if isinstance(err, dict) else None
+        msg = err.get("message", "") if isinstance(err, dict) else str(err)
+        think(f"Bank-B risk budget engine rejected intent — code {code}: {msg}. DenyReceipt signed; DAG ledger sequence updated.")
+        think("Non-repudiation preserved. Denial is cryptographically bound to the original IntentEnvelope via trace_id.")
         print(f"[bank-a-agent] BREACH BLOCKED — errorCode={code}")
     else:
-        think("WARNING: breach attempt was not blocked. Check budget configuration.")
+        think("WARNING: $50,000 transfer was not blocked. Bank-B AgentPolicy configuration requires inspection.")
 
 
 if __name__ == "__main__":

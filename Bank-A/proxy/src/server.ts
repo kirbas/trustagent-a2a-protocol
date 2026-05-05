@@ -5,6 +5,7 @@ import {
   generateKeyPair,
   ProxyAGateway,
   buildContentProvenanceReceipt,
+  sha256Json,
   type McpToolCall,
 } from "@trustagentai/a2a-core";
 import {
@@ -99,7 +100,7 @@ async function main(): Promise<void> {
       const remoteEnvelopes = await response.json() as Array<{ type: string; raw_payload: string; signature: string }>;
 
       // Also verify anchor
-      const anchorResponse = await fetch(`${process.env.PROXY_B_URL ?? "http://bank-b-proxy:3002"}/verify-trace/${encodeURIComponent(traceId)}`);
+      const anchorResponse = await fetch(`${PROXY_B_URL}/verify-trace/${encodeURIComponent(traceId)}`);
       const anchorResult = await anchorResponse.json();
       const anchorValid = anchorResponse.ok && anchorResult.ok && anchorResult.allValid;
 
@@ -197,14 +198,14 @@ async function main(): Promise<void> {
     });
     sseBus.broadcast("envelope", { type: "EXECUTION", traceId: execution.trace_id, ts });
 
-    const outputStr = JSON.stringify(mcpResult.result!.content);
-    const contentHash = createHash("sha256").update(outputStr).digest("hex");
+    const contentHash = sha256Json(mcpResult.result!.content);
+    const contentSize = Buffer.byteLength(JSON.stringify(mcpResult.result!.content));
 
     const cpr = await buildContentProvenanceReceipt({
       executionEnvelope: execution,
       content_type: "text",
       content_hash: contentHash,
-      content_size_bytes: outputStr.length,
+      content_size_bytes: contentSize,
       tool_name: tool,
       model_id: "a2a-demo-agent",
       proxyKey,

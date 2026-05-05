@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 let db: Database.Database;
 
 export function initDb(path: string): void {
-  db = new Database(path);
+  db = new Database(path, { timeout: 5000 });
   db.exec(`
     CREATE TABLE IF NOT EXISTS envelopes (
       id TEXT PRIMARY KEY,
@@ -12,18 +12,6 @@ export function initDb(path: string): void {
       raw_payload TEXT NOT NULL,
       signature TEXT NOT NULL,
       created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS ledger_chain (
-      sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      trace_id TEXT NOT NULL,
-      prev_hash TEXT,
-      node_hash TEXT NOT NULL,
-      timestamp TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS risk_budgets (
-      entity_did TEXT PRIMARY KEY,
-      max_limit REAL NOT NULL,
-      current_spend REAL NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS provenance (
       content_hash TEXT PRIMARY KEY,
@@ -48,12 +36,6 @@ export function saveEnvelope(
 
 export function getEnvelopes(): unknown[] {
   return db.prepare("SELECT * FROM envelopes ORDER BY created_at ASC").all();
-}
-
-export function getRecentEnvelopeData(limit: number): Array<{ id: string; signature: string }> {
-  return db.prepare(
-    "SELECT id, signature FROM envelopes ORDER BY created_at DESC LIMIT ?"
-  ).all(limit) as Array<{ id: string; signature: string }>;
 }
 
 export function saveProvenance(contentHash: string, txId: string, receiptSig: string): void {
