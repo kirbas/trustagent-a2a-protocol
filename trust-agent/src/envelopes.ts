@@ -146,7 +146,7 @@ export interface ExecutionEnvelopeParams {
   acceptanceReceipt: AcceptanceReceipt;
   status: "COMPLETED" | "FAILED";
   outputData: unknown;   // will be hashed, NOT stored
-  proxyKey: KeyPair;
+  proxyKey?: KeyPair;    // omit to leave unsigned — Proxy B is the exclusive signer per spec
 }
 
 export interface ExecutionEnvelope {
@@ -179,6 +179,7 @@ export async function buildExecutionEnvelope(
     result: { output_hash: sha256Json(p.outputData) },
   };
 
+  if (!p.proxyKey) return { ...base, signatures: [] };
   const sig = await signEnvelope(base as Record<string, unknown>, p.proxyKey, "proxy");
   return { ...base, signatures: [sig] };
 }
