@@ -6,6 +6,7 @@ import {
   ProxyAGateway,
   buildContentProvenanceReceipt,
   sha256Json,
+  computeEnvelopeHash,
   type McpToolCall,
 } from "@trustagentai/a2a-core";
 import {
@@ -126,6 +127,29 @@ async function main(): Promise<void> {
         match: anchorValid,
         reason: anchorValid ? `Anchored to L2 (Block ${anchorResult.blockNumber})` : (anchorResult.error || "L2 Anchor Pending or Failed")
       });
+
+      // Verify cryptographic causal chain: acceptance.intent_hash == hash(intent), execution.acceptance_hash == hash(acceptance)
+      const intentEnv  = remoteMap.get("INTENT");
+      const acceptEnv  = remoteMap.get("ACCEPTANCE");
+      const execEnv    = remoteMap.get("EXECUTION");
+      if (intentEnv && acceptEnv && execEnv) {
+        const intent     = JSON.parse(intentEnv.raw_payload) as Record<string, unknown>;
+        const acceptance = JSON.parse(acceptEnv.raw_payload) as Record<string, unknown>;
+        const execution  = JSON.parse(execEnv.raw_payload) as Record<string, unknown>;
+        const intentHash     = computeEnvelopeHash(intent);
+        const acceptanceHash = computeEnvelopeHash(acceptance);
+        const chainOk =
+          (acceptance as any).intent_hash    === intentHash &&
+          (execution as any).intent_hash     === intentHash &&
+          (execution as any).acceptance_hash === acceptanceHash;
+        details.push({
+          type: "CAUSAL_CHAIN",
+          match: chainOk,
+          reason: chainOk
+            ? "intent_hash → acceptance_hash → execution binding verified"
+            : "Causal chain broken — hash binding mismatch",
+        });
+      }
 
       const synced = details.every((d) => d.match);
       res.json({ synced, details });
