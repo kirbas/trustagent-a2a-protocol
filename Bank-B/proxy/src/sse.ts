@@ -11,8 +11,11 @@ export class SseBus {
     });
     res.write(":\n\n");
     this.clients.push(res);
+    console.log(`[sse] client connected. Total: ${this.clients.length}`);
+
     res.on("close", () => {
       this.clients = this.clients.filter((c) => c !== res);
+      console.log(`[sse] client disconnected. Total: ${this.clients.length}`);
     });
   }
 
