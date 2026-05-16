@@ -74,25 +74,19 @@ def run_demo_loop():
         system_prompt="""You are the Bank-A Autonomous Procurement Agent. 
 Your goal is to demonstrate the Trust-Agent A2A (Agent-to-Agent) protocol.
 
-MANDATORY: For every significant step of your reasoning, you MUST use the 'log_thought' tool to explain what you are doing. This thought stream is shown to the user in real-time.
+MANDATORY: For every significant step of your reasoning, you MUST use the 'log_thought' tool to explain what you are doing.
 
-Demo Scenarios to execute:
-1. Scenario 1 (Success): You need a 'Security Posture Report' from Bank-B node for a compliance audit. 
-   - Requirements: target='bank-b', format='PDF', classification='CONFIDENTIAL'.
-   - Estimated cost: $5,000 (well within your $10k single-action budget).
-   - After success, confirm the protocol phases (Intent->Acceptance->Execution) and trace_id.
-   - Call signal_anchor_request() to finalize the record on-chain.
+ALLOWED TOOLS for 'invoke_trust_proxy':
+- 'security_posture_report' (Success scenario)
+- 'execute_wire_transfer' (Breach scenario)
 
-2. Scenario 2 (Breach Attempt): You attempt to execute a 'Wire Transfer' of $50,000.
-   - Requirements: amount=50000, to='external-acct-99', memo='BULK-PROCUREMENT'.
-   - Expected Result: This SHOULD FAIL because it exceeds the $10,000 single-action policy limit.
-   - After rejection, acknowledge the cryptographically signed DenyReceipt and the non-repudiation aspects.
-   - Call signal_anchor_request() to finalize the denial record on-chain.
+DO NOT use capitalized names like 'SecurityPostureReport'. Use ONLY the exact strings listed above.
 
-Use 'log_thought' BEFORE every action to explain your intent.
-When calling 'invoke_trust_proxy', always pass the 'cost' parameter (e.g. 5000 or 50000).
+Demo Scenarios:
+1. Scenario 1 (Success): Request 'security_posture_report' from Bank-B. Cost $5,000.
+2. Scenario 2 (Breach Attempt): Attempt 'execute_wire_transfer' of $50,000.
+
 Always check the output of 'invoke_trust_proxy'. If it contains an error, explain it.
-When finished with both scenarios, output a summary and stop.
 """
     )
 

@@ -29,6 +29,12 @@ export function initDb(path: string): void {
       proof_path TEXT NOT NULL,
       PRIMARY KEY (batch_id, leaf_index)
     );
+    CREATE TABLE IF NOT EXISTS thoughts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 }
 
@@ -142,8 +148,22 @@ export function getDisputePackByTraceId(traceId: string) {
   };
 }
 
+export function getAnchors(): AnchorRow[] {
+  return db.prepare("SELECT * FROM anchors ORDER BY created_at ASC").all() as AnchorRow[];
+}
+
 export function clearEnvelopes(): void {
   db.exec("DELETE FROM envelopes");
   db.exec("DELETE FROM anchors");
   db.exec("DELETE FROM anchor_leaves");
+  db.exec("DELETE FROM thoughts");
+}
+
+export function saveThought(source: string, text: string): void {
+  db.prepare("INSERT INTO thoughts (source, text, created_at) VALUES (?, ?, ?)")
+    .run(source, text, new Date().toISOString());
+}
+
+export function getThoughts(): any[] {
+  return db.prepare("SELECT * FROM thoughts ORDER BY created_at ASC").all();
 }

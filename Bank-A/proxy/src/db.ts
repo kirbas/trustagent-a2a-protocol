@@ -19,6 +19,12 @@ export function initDb(path: string): void {
       receipt_sig TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS thoughts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 }
 
@@ -51,4 +57,14 @@ export function getEnvelopesByTraceId(traceId: string): unknown[] {
 export function clearEnvelopes(): void {
   db.exec("DELETE FROM envelopes");
   db.exec("DELETE FROM provenance");
+  db.exec("DELETE FROM thoughts");
+}
+
+export function saveThought(source: string, text: string): void {
+  db.prepare("INSERT INTO thoughts (source, text, created_at) VALUES (?, ?, ?)")
+    .run(source, text, new Date().toISOString());
+}
+
+export function getThoughts(): any[] {
+  return db.prepare("SELECT * FROM thoughts ORDER BY created_at ASC").all();
 }

@@ -15,6 +15,8 @@ import {
   saveProvenance,
   clearEnvelopes,
   getEnvelopesByTraceId,
+  saveThought,
+  getThoughts,
 } from "./db.js";
 import { SseBus } from "./sse.js";
 import { registerWithProxyB } from "./key-exchange.js";
@@ -27,12 +29,9 @@ const PROXY_KID = "did:workload:bank-a-proxy#key-1";
 
 let triggered = false;
 
-// ── Main ───────────────────────────────────────────────────────────────────
-
 async function main(): Promise<void> {
   const proxyKey = await generateKeyPair(PROXY_KID);
 
-  // Auto-register with Proxy B for the demo
   try {
     const BANK_A_DID = "did:workload:bank-a-proxy";
     await registerWithProxyB(
@@ -58,7 +57,11 @@ async function main(): Promise<void> {
 
   const app = express();
   app.use(express.json());
-  app.use(cors({ origin: process.env.FRONTEND_ORIGIN ?? "http://localhost:3000" }));
+  app.use(cors({ origin: "*" }));
+  app.use((req, _res, next) => {
+    console.log(`[bank-a-proxy] ${req.method} ${req.url}`);
+    next();
+  });
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -83,19 +86,18 @@ async function main(): Promise<void> {
   app.get("/trigger-status", (_req, res) => res.json({ triggered }));
 
   app.post("/thought", (req, res) => {
-    sseBus.broadcast("thought", {
-      source: "bank-a",
-      text: req.body.text,
-      ts: new Date().toISOString(),
-    });
+    const { source = "bank-a", text } = req.body;
+    const ts = new Date().toISOString();
+    saveThought(source, text);
+    sseBus.broadcast("thought", { source, text, ts });
     res.json({ ok: true });
   });
 
   app.get("/events", (_req, res) => sseBus.addClient(res));
 
   app.get("/envelopes", (_req, res) => res.json(getEnvelopes()));
+  app.get("/thoughts", (_req, res) => res.json(getThoughts()));
 
-  // ── Bilateral Cross-Check ─────────────────────────────────────────────────
   app.post("/cross-check", async (req, res) => {
     const { traceId } = req.body as { traceId: string };
     if (!traceId) {
@@ -112,11 +114,6 @@ async function main(): Promise<void> {
       }
       const remoteEnvelopes = await response.json() as Array<{ type: string; raw_payload: string; signature: string }>;
 
-      // Also verify anchor
-      const anchorResponse = await fetch(`${PROXY_B_URL}/verify-trace/${encodeURIComponent(traceId)}`);
-      const anchorResult = await anchorResponse.json();
-      const anchorValid = anchorResponse.ok && anchorResult.ok && anchorResult.allValid;
-
       const localMap = new Map(localEnvelopes.map((e) => [e.type, e]));
       const remoteMap = new Map(remoteEnvelopes.map((e) => [e.type, e]));
 
@@ -132,12 +129,6 @@ async function main(): Promise<void> {
           return { type, match: false, reason: "Payload mismatch" };
         }
         return { type, match: true, reason: "Synced" };
-      });
-
-      details.push({
-        type: "MERKLE_ANCHOR",
-        match: anchorValid,
-        reason: anchorValid ? `Anchored to L2 (Block ${anchorResult.blockNumber})` : (anchorResult.error || "L2 Anchor Pending or Failed")
       });
 
       const synced = details.every((d) => d.match);
@@ -177,58 +168,63 @@ async function main(): Promise<void> {
       report_id: randomUUID(),
     });
 
-    let mcpResult = await proxyA.forwardToolCall(call, executor);
+    try {
+      let mcpResult = await proxyA.forwardToolCall(call, executor);
 
-    if (mcpResult.error && String(mcpResult.error).includes("Unknown key")) {
-      console.log("[bank-a-proxy] key not recognized by Proxy B — re-registering and retrying");
-      await registerWithProxyB(PROXY_B_URL, PROXY_KID, publicKeyHex);
-      mcpResult = await proxyA.forwardToolCall(call, executor);
+      if (mcpResult.error && String(mcpResult.error).includes("Unknown key")) {
+        console.log("[bank-a-proxy] key not recognized by Proxy B — re-registering and retrying");
+        await registerWithProxyB(PROXY_B_URL, PROXY_KID, publicKeyHex);
+        mcpResult = await proxyA.forwardToolCall(call, executor);
+      }
+
+      const ts = new Date().toISOString();
+
+      if (mcpResult.error) {
+        res.status(400).json(mcpResult);
+        return;
+      }
+
+      const { intent_envelope: intent, acceptance_receipt: acceptance, execution_envelope: execution } =
+        mcpResult.result!._a2a!;
+
+      saveEnvelope(intent.trace_id + ":intent", "INTENT", intent.trace_id, intent, JSON.stringify(intent.signatures));
+      saveEnvelope(acceptance.trace_id + ":acceptance", "ACCEPTANCE", acceptance.trace_id, acceptance, JSON.stringify(acceptance.signatures));
+      saveEnvelope(execution.trace_id + ":execution", "EXECUTION", execution.trace_id, execution, JSON.stringify(execution.signatures));
+
+      sseBus.broadcast("envelope", { type: "INTENT", traceId: intent.trace_id, tool, ts });
+      sseBus.broadcast("envelope", { type: "ACCEPTANCE", traceId: acceptance.trace_id, ts });
+
+      sseBus.broadcast("execution-complete", {
+        traceId: execution.trace_id,
+        status: execution.status,
+        tool,
+        cost,
+        ts,
+      });
+      sseBus.broadcast("envelope", { type: "EXECUTION", traceId: execution.trace_id, ts });
+
+      const contentHash = sha256Json(mcpResult.result!.content);
+      const contentSize = Buffer.byteLength(JSON.stringify(mcpResult.result!.content));
+
+      const cpr = await buildContentProvenanceReceipt({
+        executionEnvelope: execution,
+        content_type: "text",
+        content_hash: contentHash,
+        content_size_bytes: contentSize,
+        tool_name: tool,
+        model_id: "a2a-demo-agent",
+        proxyKey,
+      });
+
+      saveEnvelope(cpr.trace_id + ":provenance", "PROVENANCE", cpr.trace_id, cpr, JSON.stringify(cpr.signatures));
+      saveProvenance(cpr.content.content_hash, cpr.trace_id, JSON.stringify(cpr.signatures));
+      sseBus.broadcast("envelope", { type: "PROVENANCE", traceId: cpr.trace_id, ts });
+
+      res.json(mcpResult);
+    } catch (err) {
+      console.error("[invoke] error:", err);
+      res.status(400).json({ error: String(err) });
     }
-
-    const ts = new Date().toISOString();
-
-    if (mcpResult.error) {
-      res.status(400).json(mcpResult);
-      return;
-    }
-
-    const { intent_envelope: intent, acceptance_receipt: acceptance, execution_envelope: execution } =
-      mcpResult.result!._a2a!;
-
-    saveEnvelope(intent.trace_id + ":intent", "INTENT", intent.trace_id, intent, JSON.stringify(intent.signatures));
-    saveEnvelope(acceptance.trace_id + ":acceptance", "ACCEPTANCE", acceptance.trace_id, acceptance, JSON.stringify(acceptance.signatures));
-    saveEnvelope(execution.trace_id + ":execution", "EXECUTION", execution.trace_id, execution, JSON.stringify(execution.signatures));
-
-    sseBus.broadcast("envelope", { type: "INTENT", traceId: intent.trace_id, tool, ts });
-    sseBus.broadcast("envelope", { type: "ACCEPTANCE", traceId: acceptance.trace_id, ts });
-
-    sseBus.broadcast("execution-complete", {
-      traceId: execution.trace_id,
-      status: execution.status,
-      tool,
-      cost,
-      ts,
-    });
-    sseBus.broadcast("envelope", { type: "EXECUTION", traceId: execution.trace_id, ts });
-
-    const contentHash = sha256Json(mcpResult.result!.content);
-    const contentSize = Buffer.byteLength(JSON.stringify(mcpResult.result!.content));
-
-    const cpr = await buildContentProvenanceReceipt({
-      executionEnvelope: execution,
-      content_type: "text",
-      content_hash: contentHash,
-      content_size_bytes: contentSize,
-      tool_name: tool,
-      model_id: "a2a-demo-agent",
-      proxyKey,
-    });
-
-    saveEnvelope(cpr.trace_id + ":provenance", "PROVENANCE", cpr.trace_id, cpr, JSON.stringify(cpr.signatures));
-    saveProvenance(cpr.content.content_hash, cpr.trace_id, JSON.stringify(cpr.signatures));
-    sseBus.broadcast("envelope", { type: "PROVENANCE", traceId: cpr.trace_id, ts });
-
-    res.json(mcpResult);
   });
 
   app.listen(PORT, () => console.log(`TrustAgentAI Proxy A listening on :${PORT}`));

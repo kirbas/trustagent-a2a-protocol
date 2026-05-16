@@ -32,7 +32,7 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
   const thoughts = useMemo(() => {
     const a = thoughtsA.map((d) => { try { return JSON.parse(d) as ThoughtEvent; } catch { return null; } }).filter(Boolean) as ThoughtEvent[];
     const b = thoughtsB.map((d) => { try { return JSON.parse(d) as ThoughtEvent; } catch { return null; } }).filter(Boolean) as ThoughtEvent[];
-    return [...a, ...b].sort((x, y) => x.ts.localeCompare(y.ts));
+    return [...a, ...b].sort((x, y) => (x.ts || "").localeCompare(y.ts || ""));
   }, [thoughtsA, thoughtsB]);
 
   const protocolLog = useMemo(() => {

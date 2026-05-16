@@ -2,8 +2,10 @@ import { useMemo, useState, useEffect } from "react";
 import { useSSE } from "../hooks/useSSE";
 import type { HandshakeEvent, AnchorEvent } from "../types";
 
-const PROXY_A = import.meta.env.VITE_PROXY_A_URL ?? "http://localhost:3001";
-const PROXY_B = import.meta.env.VITE_PROXY_B_URL ?? "http://localhost:3002";
+import { getProxyUrl } from "../utils/urls";
+
+const PROXY_A = getProxyUrl(3001, import.meta.env.VITE_PROXY_A_URL);
+const PROXY_B = getProxyUrl(3002, import.meta.env.VITE_PROXY_B_URL);
 
 interface TraceStep {
   label: string;
@@ -41,7 +43,7 @@ export function HandshakeVisualizer({
   onReset: () => void;
 }) {
   const [running, setRunning] = useState(false);
-  const { eventsA, eventsB } = useSSE();
+  const { eventsA, eventsB, statusA, statusB } = useSSE();
 
   const demoRaw          = eventsA["demo-triggered"]    ?? [];
   const execARaw         = eventsA["execution-complete"] ?? [];
@@ -181,6 +183,10 @@ export function HandshakeVisualizer({
         >
           Bilateral Handshake
         </span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center", marginLeft: "auto", marginRight: 8 }}>
+          <div title={`Proxy A: ${statusA}`} style={{ width: 6, height: 6, borderRadius: "50%", background: statusA === "connected" ? "#4caf50" : statusA === "error" ? "#f44336" : "#f0a500" }} />
+          <div title={`Proxy B: ${statusB}`} style={{ width: 6, height: 6, borderRadius: "50%", background: statusB === "connected" ? "#4caf50" : statusB === "error" ? "#f44336" : "#f0a500" }} />
+        </div>
         {!running && (
           <button
             onClick={trigger}
