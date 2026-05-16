@@ -4,3 +4,4 @@ python-dotenv
 flask
 ollama
 anthropic
+flask-cors

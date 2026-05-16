@@ -6,7 +6,7 @@ from domain.models import AnchorRecord
 from infra.db import SQLiteRepository
 from infra.notary import BlockchainNotary
 
-BASESCAN_TX_URL = "https://sepolia.basescan.org/tx/0x{tx_hash}"
+BASESCAN_TX_URL = "https://sepolia.basescan.org/address/0x{tx_hash}"
 BATCH_SIZE = 50  # Anchor up to 50 envelopes at a time
 
 

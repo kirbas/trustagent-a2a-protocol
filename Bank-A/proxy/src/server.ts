@@ -191,7 +191,7 @@ async function main(): Promise<void> {
       saveEnvelope(acceptance.trace_id + ":acceptance", "ACCEPTANCE", acceptance.trace_id, acceptance, JSON.stringify(acceptance.signatures));
       saveEnvelope(execution.trace_id + ":execution", "EXECUTION", execution.trace_id, execution, JSON.stringify(execution.signatures));
 
-      sseBus.broadcast("envelope", { type: "INTENT", traceId: intent.trace_id, tool, ts });
+      sseBus.broadcast("envelope", { type: "INTENT", traceId: intent.trace_id, tool, cost, ts });
       sseBus.broadcast("envelope", { type: "ACCEPTANCE", traceId: acceptance.trace_id, ts });
 
       sseBus.broadcast("execution-complete", {

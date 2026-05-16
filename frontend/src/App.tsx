@@ -23,7 +23,7 @@ function ConnectionBadge({ label, status }: { label: string; status: string }) {
 }
 
 function MainLayout({ resetToken, onReset }: { resetToken: number; onReset: () => void }) {
-  const { statusA, statusB } = useSSE();
+  const { health } = useSSE();
   return (
     <div style={{
       display: "grid",
@@ -44,9 +44,12 @@ function MainLayout({ resetToken, onReset }: { resetToken: number; onReset: () =
         gap: 16,
       }}>
         <span style={{ color: "#7bb3ff", fontWeight: "bold", fontSize: 10, letterSpacing: 1 }}>TRUST-AGENT A2A MONITOR</span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 16 }}>
-          <ConnectionBadge label="Bank-A Proxy" status={statusA} />
-          <ConnectionBadge label="Bank-B Proxy" status={statusB} />
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", gap: 10 }}>
+            {Object.entries(health).map(([label, status]) => (
+              <ConnectionBadge key={label} label={label} status={status as string} />
+            ))}
+          </div>
         </div>
       </header>
 

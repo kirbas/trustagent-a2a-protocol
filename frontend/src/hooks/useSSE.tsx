@@ -2,30 +2,75 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { getProxyUrl } from "../utils/urls";
 
+type Status = "connecting" | "connected" | "error";
+
 interface SSEContextType {
   eventsA: Record<string, string[]>;
   eventsB: Record<string, string[]>;
-  statusA: "connecting" | "connected" | "error";
-  statusB: "connecting" | "connected" | "error";
+  statusA: Status;
+  statusB: Status;
+  health: Record<string, Status>;
 }
 
 const SSEContext = createContext<SSEContextType | null>(null);
 
 const PROXY_A = getProxyUrl(3001, import.meta.env.VITE_PROXY_A_URL);
 const PROXY_B = getProxyUrl(3002, import.meta.env.VITE_PROXY_B_URL);
-const BASESCAN_TX_URL = "https://sepolia.basescan.org/tx/";
+const AGENT_A = getProxyUrl(4001);
+const AGENT_B = getProxyUrl(4002);
+const ANCHOR  = getProxyUrl(5001);
+
+const BASESCAN_TX_URL = "https://sepolia.basescan.org/address/";
 
 export function SSEProvider({ children, resetToken = 0 }: { children: React.ReactNode; resetToken?: number }) {
   const [eventsA, setEventsA] = useState<Record<string, string[]>>({});
   const [eventsB, setEventsB] = useState<Record<string, string[]>>({});
-  const [statusA, setStatusA] = useState<"connecting" | "connected" | "error">("connecting");
-  const [statusB, setStatusB] = useState<"connecting" | "connected" | "error">("connecting");
+  const [statusA, setStatusA] = useState<Status>("connecting");
+  const [statusB, setStatusB] = useState<Status>("connecting");
+  const [health, setHealth] = useState<Record<string, Status>>({
+    "Bank-A Proxy": "connecting",
+    "Bank-B Proxy": "connecting",
+    "Bank-A Agent": "connecting",
+    "Bank-B Agent": "connecting",
+    "Bank-B Anchor": "connecting",
+  });
 
   useEffect(() => {
     setEventsA({});
     setEventsB({});
     setStatusA("connecting");
     setStatusB("connecting");
+
+    // Poll health
+    const pollHealth = async () => {
+      const check = async (url: string) => {
+        try {
+          const r = await fetch(`${url}/health`, { mode: 'cors' });
+          return r.ok ? "connected" : "error";
+        } catch { return "error"; }
+      };
+
+      const [hA, hB, hAgA, hAgB, hAnc] = await Promise.all([
+        check(PROXY_A),
+        check(PROXY_B),
+        check(AGENT_A),
+        check(AGENT_B),
+        check(ANCHOR),
+      ]);
+
+      setHealth({
+        "Bank-A Proxy": hA as Status,
+        "Bank-B Proxy": hB as Status,
+        "Bank-A Agent": hAgA as Status,
+        "Bank-B Agent": hAgB as Status,
+        "Bank-B Anchor": hAnc as Status,
+      });
+      setStatusA(hA as Status);
+      setStatusB(hB as Status);
+    };
+
+    const timer = setInterval(pollHealth, 5000);
+    pollHealth();
 
     // Fetch history
     const fetchHistory = async () => {
@@ -45,7 +90,8 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
             return JSON.stringify({ 
               type: e.type, 
               traceId: e.trace_id, 
-              tool: payload.target?.tool_name || payload.tool_name,
+              tool: payload.target?.tool_name || payload.params?.name || payload.tool_name,
+              cost: payload.params?._estimated_cost_usd || payload._estimated_cost_usd,
               ts: e.created_at 
             });
           }),
@@ -67,11 +113,18 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
           }),
           "intent-rejected": envelopesB.filter((e: any) => e.type === "DENIED").map((e: any) => {
              const payload = JSON.parse(e.raw_payload);
-             return JSON.stringify({ traceId: e.trace_id, reason: payload.error, ts: e.created_at });
+             const intent = envelopesB.find((env: any) => env.trace_id === e.trace_id && env.type === "INTENT");
+             const intentPayload = intent ? JSON.parse(intent.raw_payload) : {};
+             return JSON.stringify({ 
+               traceId: e.trace_id, 
+               reason: payload.error || (payload.content ? JSON.parse(payload.content).message : "Policy Rejection"),
+               tool: intentPayload.params?.name || intentPayload.target?.tool_name,
+               cost: intentPayload.params?._estimated_cost_usd,
+               ts: e.created_at 
+             });
           })
         };
 
-        // Deep mapping for anchors to traceIds
         if (anchorsB && anchorsB.length > 0) {
           const anchorEvents: string[] = [];
           for (const a of anchorsB) {
@@ -82,12 +135,13 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
                 const leafData = await leavesResp.json();
                 const uniqueTraces = [...new Set(leafData.leaves.map((l: any) => l.traceId).filter(Boolean))];
                 uniqueTraces.forEach(tid => {
+                  const txHash = a.tx_hash.startsWith("0x") ? a.tx_hash : "0x" + a.tx_hash;
                   anchorEvents.push(JSON.stringify({
                     traceId: tid,
                     merkleRoot: a.merkle_root,
-                    txHash: a.tx_hash,
+                    txHash: txHash,
                     blockNumber: a.block_number,
-                    basescanUrl: BASESCAN_TX_URL + a.tx_hash,
+                    basescanUrl: BASESCAN_TX_URL + txHash,
                     ts: a.created_at
                   }));
                 });
@@ -111,26 +165,16 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
 
     fetchHistory();
 
-    console.log(`[sse] connecting to A: ${PROXY_A}/events`);
-    console.log(`[sse] connecting to B: ${PROXY_B}/events`);
-
     const esA = new EventSource(`${PROXY_A}/events`);
     const esB = new EventSource(`${PROXY_B}/events`);
 
     const setup = (
       es: EventSource, 
       set: React.Dispatch<React.SetStateAction<Record<string, string[]>>>,
-      setStatus: (s: "connecting" | "connected" | "error") => void,
       label: string
     ) => {
-      es.onopen = () => {
-        console.log(`[sse] connection opened: ${label}`);
-        setStatus("connected");
-      };
-      es.onerror = (e) => {
-        console.error(`[sse] connection error: ${label}`, e);
-        setStatus("error");
-      };
+      es.onopen = () => console.log(`[sse] connection opened: ${label}`);
+      es.onerror = (e) => console.error(`[sse] connection error: ${label}`, e);
 
       const allEvents = [
         "thought", "envelope", "execution-complete", "demo-triggered", 
@@ -149,17 +193,18 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
       });
     };
 
-    setup(esA, setEventsA, setStatusA, "Proxy A");
-    setup(esB, setEventsB, setStatusB, "Proxy B");
+    setup(esA, setEventsA, "Proxy A");
+    setup(esB, setEventsB, "Proxy B");
 
     return () => {
+      clearInterval(timer);
       esA.close();
       esB.close();
     };
   }, [resetToken]);
 
   return (
-    <SSEContext.Provider value={{ eventsA, eventsB, statusA, statusB }}>
+    <SSEContext.Provider value={{ eventsA, eventsB, statusA, statusB, health }}>
       {children}
     </SSEContext.Provider>
   );

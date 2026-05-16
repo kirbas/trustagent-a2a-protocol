@@ -64,6 +64,8 @@ services:
       context: Bank-A/agent
       dockerfile: Dockerfile
     container_name: bank-a-agent
+    ports:
+      - "4001:4001"
     environment:
       PROXY_A_URL: "http://bank-a-proxy:3001"
       PROXY_B_URL: "http://bank-b-proxy:3002"
@@ -71,6 +73,7 @@ services:
       AGENT_MODEL_ID: "${AGENT_MODEL_ID:-ollama/qwen3.5:9b}"
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
       PYTHONUNBUFFERED: "1"
+      AGENT_PORT: "4001"
     command: python strands_agent.py
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -83,6 +86,8 @@ services:
       context: Bank-B/agent
       dockerfile: Dockerfile
     container_name: bank-b-agent
+    ports:
+      - "4002:4002"
     environment:
       PROXY_B_URL: "http://bank-b-proxy:3002"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"

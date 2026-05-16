@@ -32,7 +32,7 @@ const DB_PATH = process.env.DB_PATH ?? "/data/bank-b.db";
 const PROXY_KID = "did:workload:bank-b-proxy#key-1";
 const BANK_A_DID = "did:workload:bank-a-agent";
 const ANCHOR_URL = process.env.ANCHOR_URL ?? "http://bank-b-anchor:5001";
-const BASESCAN_TX_URL = "https://sepolia.basescan.org/tx/";
+const BASESCAN_TX_URL = "https://sepolia.basescan.org/address/0x";
 
 // ── Merkle helpers ─────────────────────────────────────────────────────────
 
