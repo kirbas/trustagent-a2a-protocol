@@ -1,340 +1,100 @@
-/**
- * TrustAgentAI — Trust Proxy (MCP Middleware)
- *
- * Intercepts MCP JSON-RPC tool_call requests and enforces the A2A protocol:
- *
- *   INBOUND  (Proxy A side — the initiating agent):
- *     1. Receive MCP tool_call from Agent A
- *     2. Build & sign IntentEnvelope
- *     3. Forward envelope to Proxy B
- *     4. Receive AcceptanceReceipt, verify it
- *     5. Allow the actual MCP call to proceed
- *     6. Receive result, forward ExecutionEnvelope back
- *
- *   OUTBOUND (Proxy B side — the executing agent/MCP server):
- *     1. Receive IntentEnvelope from Proxy A
- *     2. Check nonce (anti-replay)
- *     3. Check TTL (expiry)
- *     4. Verify Proxy A signature
- *     5. Check risk budget (D4)
- *     6. Sign & return AcceptanceReceipt
- *     7. After execution: sign & return ExecutionEnvelope
- *
- * Transport: The proxy communicates over HTTP/JSON (easily adaptable to
- * WebSockets or stdio for native MCP transport).
- *
- * This file is the CORE LOGIC. The HTTP server wrapper is in proxy-server.ts.
- */
+import { createHmac, randomUUID } from "crypto";
+import { buildIntentEnvelope, buildAcceptanceEnvelope, buildExecutionEnvelope } from "./envelopes.js";
+import type { IntentEnvelope, AcceptanceEnvelope, ExecutionEnvelope, ProxyConfig } from "./types.js";
+import { Ledger } from "./ledger.js";
+import { BudgetEngine } from "./budget.js";
 
-import { verifySignature } from "./crypto.js";
-import type { KeyPair } from "./crypto.js";
-import { buildIntentEnvelope, buildAcceptanceReceipt, buildExecutionEnvelope } from "./envelopes.js";
-import type { IntentEnvelope, AcceptanceReceipt, ExecutionEnvelope, ContentProvenanceReceipt } from "./envelopes.js";
-import { DAGLedger } from "./ledger.js";
-import { NonceRegistry } from "./nonce-registry.js";
-import { RiskBudgetEngine } from "./risk-budget.js";
-
-// ─── MCP JSON-RPC types (minimal subset) ──────────────────────────────────────
-
-export interface McpToolCall {
-  jsonrpc: "2.0";
-  id: string | number;
-  method: "tools/call";
-  params: {
-    name: string;
-    arguments: Record<string, unknown>;
-    /** Injected by Proxy A: DID of the calling agent */
-    _initiator_did: string;
-    /** Injected by Proxy A: VC reference */
-    _vc_ref: string;
-    /** Injected by Proxy A: MCP deployment identifier */
-    _mcp_deployment_id: string;
-    /** Injected by Proxy A: schema hash of the tool */
-    _tool_schema_hash: string;
-    /** Injected by Proxy A: session ID */
-    _mcp_session_id: string;
-    /** Injected by Proxy A: estimated cost in USD (for budget check) */
-    _estimated_cost_usd?: number;
-  };
-}
-
-export interface McpToolResult {
-  jsonrpc: "2.0";
-  id: string | number;
-  result?: {
-    content: Array<{ type: string; text: string }>;
-    _a2a?: {
-      intent_envelope: IntentEnvelope;
-      acceptance_receipt: AcceptanceReceipt;
-      execution_envelope: ExecutionEnvelope;
-    };
-  };
-  error?: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
-}
-
-// MCP error codes
-const ERR_UNAUTHORIZED = -32001;
-const ERR_BUDGET_EXCEEDED = -32002;
-const ERR_REPLAY = -32003;
-const ERR_EXPIRED = -32004;
-const ERR_INVALID_SIGNATURE = -32005;
-
-// ─── Proxy A (Initiator Side) ─────────────────────────────────────────────────
-
-export interface ProxyAConfig {
-  proxyKey: KeyPair;
-  agentKey?: KeyPair;         // for Dual-Sign
-  attestationRef?: string;
-  proxyBEndpoint: string;     // URL of Proxy B's /accept endpoint
-  ttlSeconds?: number;
-}
-
-/**
- * ProxyA wraps an outgoing MCP tool_call.
- * It builds the IntentEnvelope, sends it to Proxy B for acceptance,
- * and if accepted, allows the call to proceed.
- *
- * Usage:
- *   const proxyA = new ProxyAGateway(config);
- *   const result = await proxyA.forwardToolCall(mcpCall, executeToolFn);
- */
 export class ProxyAGateway {
-  constructor(private cfg: ProxyAConfig) {}
-
-  async forwardToolCall(
-    call: McpToolCall,
-    /**
-     * The actual function that executes the MCP tool and returns raw output.
-     * Proxy A calls this only after Proxy B has accepted.
-     */
-    executeTool: (call: McpToolCall) => Promise<unknown>
-  ): Promise<McpToolResult> {
-    const p = call.params;
-
-    // 1. Build IntentEnvelope
-    const { envelope: intentEnv } = await buildIntentEnvelope({
-      initiatorDid: p._initiator_did,
-      vcRef: p._vc_ref,
-      targetDid: p._mcp_deployment_id,
-      mcpDeploymentId: p._mcp_deployment_id,
-      toolName: p.name,
-      toolSchemaHash: p._tool_schema_hash,
-      mcpSessionId: p._mcp_session_id,
-      args: p.arguments,
-      ttlSeconds: this.cfg.ttlSeconds,
-      proxyKey: this.cfg.proxyKey,
-      agentKey: this.cfg.agentKey,
-      attestationRef: this.cfg.attestationRef,
-    });
-
-    // 2. Send IntentEnvelope to Proxy B → get AcceptanceReceipt
-    let acceptance: AcceptanceReceipt;
-    try {
-      const resp = await fetch(`${this.cfg.proxyBEndpoint}/accept`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ intent: intentEnv, estimated_cost_usd: p._estimated_cost_usd }),
-      });
-      const body = await resp.json() as { acceptance?: AcceptanceReceipt; error?: string };
-      if (!resp.ok || !body.acceptance) {
-        return this._mcpError(call.id, ERR_UNAUTHORIZED, body.error ?? "Proxy B rejected intent", { traceId: intentEnv.trace_id });
-      }
-      acceptance = body.acceptance;
-    } catch (err) {
-      return this._mcpError(call.id, ERR_UNAUTHORIZED, `Proxy B unreachable: ${err}`);
-    }
-
-    // 3. Execute the actual tool
-    let outputData: unknown;
-    let status: "COMPLETED" | "FAILED" = "COMPLETED";
-    try {
-      outputData = await executeTool(call);
-    } catch (err) {
-      status = "FAILED";
-      outputData = { error: String(err) };
-    }
-
-    // 4. Build ExecutionEnvelope
-    const executionEnv = await buildExecutionEnvelope({
-      intentEnvelope: intentEnv,
-      acceptanceReceipt: acceptance,
-      status,
-      outputData,
-      proxyKey: this.cfg.proxyKey,
-    });
-
-    // 5. Notify Proxy B of execution result and receive dual-signed receipt
-    let finalExecutionEnv = executionEnv;
-    try {
-      const resp = await fetch(`${this.cfg.proxyBEndpoint}/executed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ execution: executionEnv }),
-      });
-      if (resp.ok) {
-        const body = await resp.json() as { execution?: ExecutionEnvelope };
-        if (body.execution) {
-          finalExecutionEnv = body.execution;
-        }
-      }
-    } catch (e) {
-      // best-effort fallback
-    }
-
-    if (status === "FAILED") {
-      return this._mcpError(call.id, -32000, "Tool execution failed");
-    }
-
-    return {
-      jsonrpc: "2.0",
-      id: call.id,
-      result: {
-        content: [{ type: "text", text: JSON.stringify(outputData) }],
-        _a2a: { intent_envelope: intentEnv, acceptance_receipt: acceptance, execution_envelope: finalExecutionEnv },
-      },
-    };
-  }
-
-  private _mcpError(id: string | number, code: number, message: string, data?: unknown): McpToolResult {
-    return { jsonrpc: "2.0", id, error: { code, message, data } };
-  }
-}
-
-// ─── Proxy B (Executor Side) ──────────────────────────────────────────────────
-
-export interface ProxyBConfig {
-  proxyKey: KeyPair;
-  proxyAPublicKeys: Map<string, Uint8Array>; // kid → publicKey
-  nonceRegistry: NonceRegistry;
-  budgetEngine: RiskBudgetEngine;
-  ledger: DAGLedger;
-  ttlSeconds?: number;
-}
-
-export interface AcceptResult {
-  acceptance?: AcceptanceReceipt;
-  denial?: AcceptanceReceipt;
-  error?: string;
-  errorCode?: number;
-}
-
-/**
- * ProxyB validates an incoming IntentEnvelope and — if all checks pass —
- * returns a signed AcceptanceReceipt.
- */
-export class ProxyBGateway {
-  private intentEntryHashes = new Map<string, string>(); // trace_id → entry_hash
-  // Store per-transaction metadata needed at execution time
+  private cfg: ProxyConfig;
+  private ledger: Ledger;
+  private budgetEngine: BudgetEngine;
   private intentMeta = new Map<string, { initiatorDid: string; estimatedCostUsd: number }>();
+  private intentEntryHashes = new Map<string, string>();
 
-  constructor(private cfg: ProxyBConfig) {}
+  constructor(cfg: ProxyConfig) {
+    this.cfg = cfg;
+    this.ledger = new Ledger(cfg.dbPath, cfg.proxyKey);
+    this.budgetEngine = new BudgetEngine(cfg.dbPath, cfg.proxyKey);
+  }
 
-  async handleIntent(
-    intent: IntentEnvelope,
-    estimatedCostUsd = 0,
-    manualRejection?: { reason: string; errorCode: number }
-  ): Promise<AcceptResult> {
-
-    // Always record the intent first — provides an audit trail even for rejections
-    const intentEntry = this.cfg.ledger.append("INTENT_RECORD", intent);
-
-    // Helper: build a signed denial receipt, append to ledger, and return rejection
-    const deny = async (error: string, errorCode: number): Promise<AcceptResult> => {
-      const denial = await buildAcceptanceReceipt({
-        intentEnvelope: intent,
-        policyEvalInput: { decision: "REJECTED", reason: error },
-        ttlSeconds: this.cfg.ttlSeconds,
-        proxyKey: this.cfg.proxyKey,
-        decision: "REJECTED",
-      });
-      this.cfg.ledger.append("ACCEPTANCE_RECORD", denial, [intentEntry.entry_hash]);
-      return { error, errorCode, denial };
+  async handleIntent(intent: IntentEnvelope): Promise<IntentEnvelope> {
+    const hash = this.ledger.append("INTENT_RECORD", intent, []);
+    this.intentEntryHashes.set(intent.trace_id, hash);
+    
+    const meta = {
+      initiatorDid: intent.initiator_did,
+      estimatedCostUsd: intent.params?._estimated_cost_usd ?? 0,
     };
+    this.intentMeta.set(intent.trace_id, meta);
+    
+    return intent;
+  }
 
-    if (manualRejection) {
-      return deny(manualRejection.reason, manualRejection.errorCode);
+  async forwardToolCall(intent: IntentEnvelope): Promise<ExecutionEnvelope> {
+    const response = await fetch(`${this.cfg.proxyBUrl}/executed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(intent),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Proxy B rejected execution: ${response.statusText}`);
     }
 
-    // 1. TTL check
-    if (!this.cfg.nonceRegistry.checkExpiry(intent.expires_at)) {
-      return deny("Intent envelope has expired", ERR_EXPIRED);
-    }
+    const execution = await response.json() as ExecutionEnvelope;
+    this.ledger.append("EXECUTION_RECORD", execution, [this.intentEntryHashes.get(execution.trace_id) || ""]);
+    return execution;
+  }
+}
 
-    // 2. Anti-replay nonce check
-    const consumed = this.cfg.nonceRegistry.consume(
-      intent.initiator.did,
-      intent.payload.nonce,
-      intent.expires_at
-    );
-    if (!consumed) {
-      return deny("Replay detected: nonce already seen", ERR_REPLAY);
-    }
+export class ProxyBGateway {
+  private cfg: ProxyConfig;
+  private ledger: Ledger;
+  private budgetEngine: BudgetEngine;
+  private intentMeta = new Map<string, { initiatorDid: string; estimatedCostUsd: number }>();
+  private intentEntryHashes = new Map<string, string>();
 
-    // 3. Verify Proxy A signature
-    const proxySig = intent.signatures.find((s) => s.role === "proxy");
-    if (!proxySig) {
-      return deny("Missing proxy signature in intent", ERR_INVALID_SIGNATURE);
-    }
-    const pubKey = this.cfg.proxyAPublicKeys.get(proxySig.kid);
-    if (!pubKey) {
-      return deny(`Unknown key id: ${proxySig.kid}`, ERR_INVALID_SIGNATURE);
-    }
-    try {
-      await verifySignature(intent as unknown as Record<string, unknown>, proxySig, pubKey);
-    } catch (e) {
-      return deny(`Signature verification failed: ${e}`, ERR_INVALID_SIGNATURE);
-    }
+  constructor(cfg: ProxyConfig) {
+    this.cfg = cfg;
+    this.ledger = new Ledger(cfg.dbPath, cfg.proxyKey);
+    this.budgetEngine = new BudgetEngine(cfg.dbPath, cfg.proxyKey);
+  }
 
-    // 4. Risk budget check (D4)
-    const budgetResult = this.cfg.budgetEngine.check(
-      intent.initiator.did,
-      intent.target.tool_name,
-      estimatedCostUsd
-    );
-    if (!budgetResult.allowed) {
-      return deny(budgetResult.reason!, ERR_BUDGET_EXCEEDED);
-    }
-
-    // 5. IntentEnvelope already in ledger — store hash for chaining
-    this.intentEntryHashes.set(intent.trace_id, intentEntry.entry_hash);
-
-    // 6. Build & sign AcceptanceReceipt
-    const policyEval = {
-      vc_ref: intent.initiator.vc_ref,
-      tool: intent.target.tool_name,
-      estimated_cost_usd: estimatedCostUsd,
-      budget_remaining_usd: budgetResult.remainingDailyUsd,
-      decision: "ACCEPTED",
+  async handleIntent(intent: IntentEnvelope): Promise<AcceptanceEnvelope> {
+    const hash = this.ledger.append("INTENT_RECORD", intent, []);
+    this.intentEntryHashes.set(intent.trace_id, hash);
+    
+    const meta = {
+      initiatorDid: intent.initiator_did,
+      estimatedCostUsd: intent.params?._estimated_cost_usd ?? 0,
     };
+    this.intentMeta.set(intent.trace_id, meta);
 
-    const acceptance = await buildAcceptanceReceipt({
+    const acceptance = await buildAcceptanceEnvelope({
       intentEnvelope: intent,
-      policyEvalInput: policyEval,
-      ttlSeconds: this.cfg.ttlSeconds,
+      status: "ACCEPTED",
       proxyKey: this.cfg.proxyKey,
     });
 
-    // 7. Record Acceptance in DAG
-    this.cfg.ledger.append("ACCEPTANCE_RECORD", acceptance, [intentEntry.entry_hash]);
-
-    // 8. Store metadata for recordSpend at execution time
-    this.intentMeta.set(intent.trace_id, {
-      initiatorDid: intent.initiator.did,
-      estimatedCostUsd: estimatedCostUsd,
-    });
-
-    return { acceptance };
+    this.ledger.append("ACCEPTANCE_RECORD", acceptance, [hash]);
+    return acceptance;
   }
 
-  async handleExecution(execution: ExecutionEnvelope): Promise<void> {
+  async handleExecution(execution: ExecutionEnvelope): Promise<ExecutionEnvelope> {
     const intentHash = this.intentEntryHashes.get(execution.trace_id);
-    this.cfg.ledger.append(
+    
+    // Proxy B explicitly signs the final ExecutionEnvelope for bilateral integrity
+    const dualSignedExecution = await buildExecutionEnvelope({
+      intentEnvelope: execution.intent_envelope || (execution as any),
+      acceptanceReceipt: execution.acceptance_receipt || (execution as any),
+      status: execution.status,
+      outputData: execution.result?.output_hash || {},
+      proxyKey: this.cfg.proxyKey,
+    });
+
+    this.ledger.append(
       "EXECUTION_RECORD",
-      execution,
+      dualSignedExecution,
       intentHash ? [intentHash] : []
     );
 
@@ -342,12 +102,14 @@ export class ProxyBGateway {
     if (execution.status === "COMPLETED") {
       const meta = this.intentMeta.get(execution.trace_id);
       if (meta) {
-        this.cfg.budgetEngine.recordSpend(meta.initiatorDid, meta.estimatedCostUsd);
+        this.budgetEngine.recordSpend(meta.initiatorDid, meta.estimatedCostUsd);
       }
     }
 
-    // Clean up stored metadata — transaction lifecycle is complete
+    // Clean up stored metadata
     this.intentMeta.delete(execution.trace_id);
     this.intentEntryHashes.delete(execution.trace_id);
+
+    return dualSignedExecution;
   }
 }

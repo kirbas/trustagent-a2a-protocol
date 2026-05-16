@@ -17,9 +17,20 @@ const PROTOCOL_EVENT_COLOR: Record<string, string> = {
 
 type Mode = "thoughts" | "protocol";
 
+// Defensive parser for thought stream
+const safeParseThought = (raw: string): ThoughtEvent | null => {
+  try {
+    const parsed = JSON.parse(raw) as ThoughtEvent;
+    if (parsed && typeof parsed.text === "string") return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+};
+
 export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
   const [mode, setMode] = useState<Mode>("thoughts");
-  const { eventsA, eventsB } = useSSE();
+  const { eventsA, eventsB, systemPhase } = useSSE();
 
   const thoughtsA = eventsA["thought"] ?? [];
   const thoughtsB = eventsB["thought"] ?? [];
@@ -30,8 +41,8 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
   const execB     = eventsB["execution-complete"] ?? [];
 
   const thoughts = useMemo(() => {
-    const a = thoughtsA.map((d) => { try { return JSON.parse(d) as ThoughtEvent; } catch { return null; } }).filter(Boolean) as ThoughtEvent[];
-    const b = thoughtsB.map((d) => { try { return JSON.parse(d) as ThoughtEvent; } catch { return null; } }).filter(Boolean) as ThoughtEvent[];
+    const a = thoughtsA.map(safeParseThought).filter(Boolean) as ThoughtEvent[];
+    const b = thoughtsB.map(safeParseThought).filter(Boolean) as ThoughtEvent[];
     return [...a, ...b].sort((x, y) => (x.ts || "").localeCompare(y.ts || ""));
   }, [thoughtsA, thoughtsB]);
 
@@ -120,14 +131,23 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "8px 10px" }}>
+        {/* Zero-State / Tutorial */}
+        {systemPhase === "IDLE" && thoughts.length === 0 && protocolLog.length === 0 && (
+          <div style={{ 
+            display: "flex", flexDirection: "column", alignItems: "center", 
+            justifyContent: "center", height: "100%", color: "#555", fontSize: 11, textAlign: "center" 
+          }}>
+            <div style={{ marginBottom: 8, fontSize: 14, color: "#7bb3ff" }}>⏳ System Idle</div>
+            <div>Waiting for autonomous agent cycle to initialize...</div>
+            <div style={{ marginTop: 8, color: "#333" }}>
+              Once an <code>INTENT_RECORD</code> is emitted, the ledger will populate and stream live.
+            </div>
+          </div>
+        )}
+
         {/* ── Thoughts mode ── */}
         {mode === "thoughts" && (
           <>
-            {thoughts.length === 0 && (
-              <div style={{ color: "#2a2a3a", fontSize: 11, marginTop: 12 }}>
-                System idle. Waiting for autonomous agent workflow...
-              </div>
-            )}
             {thoughts.map((t, i) => {
               const color = t.source === "bank-a" ? BANK_A_COLOR : BANK_B_COLOR;
               const label = t.source === "bank-a" ? "BANK-A" : "BANK-B";
@@ -139,7 +159,7 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
                   <div style={{ color, fontSize: 10, marginBottom: 3 }}>
                     {label} · {new Date(t.ts).toLocaleTimeString()}
                   </div>
-                  <div style={{ lineHeight: 1.4 }}>{t.text}</div>
+                  <div style={{ lineHeight: 1.4, whiteSpace: "pre-wrap" }}>{t.text}</div>
                 </div>
               );
             })}
@@ -149,11 +169,6 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
         {/* ── Protocol mode ── */}
         {mode === "protocol" && (
           <>
-            {protocolLog.length === 0 && (
-              <div style={{ color: "#2a2a3a", fontSize: 10, marginTop: 12, fontFamily: "monospace" }}>
-                $ awaiting A2A protocol traffic…
-              </div>
-            )}
             {protocolLog.map((entry, i) => (
               <div key={i} style={{
                 marginBottom: 3, fontFamily: "monospace", fontSize: 9,

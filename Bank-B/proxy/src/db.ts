@@ -1,9 +1,17 @@
 import Database from "better-sqlite3";
 
 let db: Database.Database;
+let sseBus: any = null;
+
+export function setSseBus(bus: any): void {
+  sseBus = bus;
+}
 
 export function initDb(path: string): void {
   db = new Database(path, { timeout: 5000 });
+  db.pragma("journal_mode = WAL");
+  db.pragma("busy_timeout = 5000");
+  
   db.exec(`
     CREATE TABLE IF NOT EXISTS envelopes (
       id TEXT PRIMARY KEY,
@@ -45,9 +53,16 @@ export function saveEnvelope(
   rawPayload: unknown,
   signature: string
 ): void {
+  const now = new Date().toISOString();
   db.prepare(
     "INSERT OR IGNORE INTO envelopes (id, type, trace_id, raw_payload, signature, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(id, type, traceId, JSON.stringify(rawPayload), signature, new Date().toISOString());
+  ).run(id, type, traceId, JSON.stringify(rawPayload), signature, now);
+  
+  sseBus?.broadcast("envelope", { id, type, trace_id: traceId, created_at: now });
+  
+  if (type === "INTENT") {
+    sseBus?.broadcast("system-phase", { phase: "RUNNING" });
+  }
 }
 
 export function getEnvelopes(): unknown[] {
@@ -160,8 +175,11 @@ export function clearEnvelopes(): void {
 }
 
 export function saveThought(source: string, text: string): void {
+  const now = new Date().toISOString();
   db.prepare("INSERT INTO thoughts (source, text, created_at) VALUES (?, ?, ?)")
-    .run(source, text, new Date().toISOString());
+    .run(source, text, now);
+  
+  sseBus?.broadcast("thought", { source, text, ts: now });
 }
 
 export function getThoughts(): any[] {
