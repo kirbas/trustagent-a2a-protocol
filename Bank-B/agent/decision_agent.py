@@ -2,6 +2,7 @@ import os
 import json
 import requests
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from strands import Agent
 from strands.models.ollama import OllamaModel
 from strands.models.anthropic import AnthropicModel
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)
 PROXY_URL = os.environ.get("PROXY_B_URL", "http://bank-b-proxy:3002")
 MODEL_ID = os.environ.get("AGENT_MODEL_ID", "ollama/qwen3.6:27b")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")

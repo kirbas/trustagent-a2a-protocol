@@ -19,6 +19,8 @@
 - **Bank-A Auto-Retry**: Implemented automatic public key re-registration if the peer node loses ephemeral state.
 
 ### 🎨 UI/UX Improvements
+- **Start Demo Relocation**: Relocated the autonomous demo trigger button to the header of the Bilateral Handshake component for improved visibility and logical flow.
+- **BaseScan Link Fix**: Corrected the formatting of the blockchain explorer URL to properly point to the Base Sepolia `/address/` or `/tx/` path, ensuring the anchor links are clickable in the Handshake visualizer.
 - **Trace Filtering**: Added a fast-filter dropdown to the Dispute Console for rapid navigation of high-volume trace histories.
 - **Error Boundaries**: Wrapped critical dashboard panels in React Error Boundaries to display "Node Offline" alerts instead of application crashes.
 - **Header Standardization**: Aligned all column headers (84px) and removed `urn:uuid:` prefixes for a cleaner, professional aesthetics.

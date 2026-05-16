@@ -38,7 +38,6 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
   const protocolLog = useMemo(() => {
     type LogEntry = { ts: string; color: string; label: string; detail: string };
     const entries: LogEntry[] = [];
-
     const parse = (raw: string): any => { try { return JSON.parse(raw); } catch { return {}; } };
 
     for (const d of envelopeA) {
@@ -48,7 +47,7 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
         ts: e.ts ?? "",
         color: PROTOCOL_EVENT_COLOR[e.type] ?? "#888",
         label: `A→B  [${e.type}]`,
-        detail: [e.tool && `tool:${e.tool}`, e.traceId && `trace:…${String(e.traceId).slice(-8)}`].filter(Boolean).join("  "),
+        detail: [e.tool && `tool:${e.tool}`, e.cost && `cost:$${e.cost}`, e.traceId && `trace:…${String(e.traceId).slice(-8)}`].filter(Boolean).join("  "),
       });
     }
     for (const d of execA) {
@@ -66,7 +65,7 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
         ts: e.ts ?? "",
         color: "#4caf50",
         label: `B    [ACCEPTED]`,
-        detail: [e.tool && `tool:${e.tool}`, e.traceId && `trace:…${String(e.traceId).slice(-8)}`].filter(Boolean).join("  "),
+        detail: [e.tool && `tool:${e.tool}`, e.cost && `cost:$${e.cost}`, e.traceId && `trace:…${String(e.traceId).slice(-8)}`].filter(Boolean).join("  "),
       });
     }
     for (const d of rejectedB) {
@@ -78,18 +77,8 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
         detail: [`code:${e.errorCode ?? "?"}`, e.traceId && `trace:…${String(e.traceId).slice(-8)}`].filter(Boolean).join("  "),
       });
     }
-    for (const d of execB) {
-      const e = parse(d);
-      entries.push({
-        ts: e.ts ?? "",
-        color: "#a78bfa",
-        label: `B    [EXEC]`,
-        detail: [`status:${e.status ?? "?"}`, e.traceId && `trace:…${String(e.traceId).slice(-8)}`].filter(Boolean).join("  "),
-      });
-    }
-
     return entries.sort((a, b) => a.ts.localeCompare(b.ts));
-  }, [envelopeA, execA, acceptedB, rejectedB, execB]);
+  }, [envelopeA, execA, acceptedB, rejectedB]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const listLen = mode === "thoughts" ? thoughts.length : protocolLog.length;
@@ -135,8 +124,8 @@ export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
         {mode === "thoughts" && (
           <>
             {thoughts.length === 0 && (
-              <div style={{ color: "#2a2a3a", fontSize: 12, marginTop: 12 }}>
-                Waiting for demo to start…
+              <div style={{ color: "#2a2a3a", fontSize: 11, marginTop: 12 }}>
+                System idle. Waiting for autonomous agent workflow...
               </div>
             )}
             {thoughts.map((t, i) => {

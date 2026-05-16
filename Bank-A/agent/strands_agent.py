@@ -2,6 +2,9 @@ import os
 import time
 import requests
 import json
+import threading
+from flask import Flask, jsonify
+from flask_cors import CORS
 from strands import Agent, tool
 from strands.models import OllamaModel, AnthropicModel
 
@@ -9,6 +12,18 @@ from strands.models import OllamaModel, AnthropicModel
 PROXY_URL = os.getenv("PROXY_A_URL", "http://localhost:3001")
 MODEL_ID = os.getenv("AGENT_MODEL_ID", "ollama/qwen3.6:27b")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+
+# Flask for Health
+app = Flask(__name__)
+CORS(app)
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "healthy"})
+
+def start_health_server():
+    port = int(os.getenv("AGENT_PORT", 4001))
+    app.run(host="0.0.0.0", port=port)
 
 @tool
 def log_thought(text: str) -> str:
@@ -102,6 +117,9 @@ Always check the output of 'invoke_trust_proxy'. If it contains an error, explai
         print("[bank-a-agent] Demo complete. Resetting trigger.")
 
 if __name__ == "__main__":
+    # Start health server in background
+    threading.Thread(target=start_health_server, daemon=True).start()
+
     # Wait for proxy to be ready
     while True:
         try:

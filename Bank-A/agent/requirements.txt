@@ -3,3 +3,5 @@ strands-agents
 python-dotenv
 ollama
 anthropic
+flask
+flask-cors
