@@ -20,7 +20,7 @@ const AGENT_A = getProxyUrl(4001);
 const AGENT_B = getProxyUrl(4002);
 const ANCHOR  = getProxyUrl(5001);
 
-const BASESCAN_TX_URL = "https://sepolia.basescan.org/address/";
+const BASESCAN_TX_URL = "https://sepolia.basescan.org/address/0x";
 
 export function SSEProvider({ children, resetToken = 0 }: { children: React.ReactNode; resetToken?: number }) {
   const [eventsA, setEventsA] = useState<Record<string, string[]>>({});
@@ -83,45 +83,63 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
           fetch(`${PROXY_B}/anchors`).then(r => r.json()).catch(() => []),
         ]);
 
+        const safeParsePayload = (raw: string): any => {
+          try { return JSON.parse(raw); } catch { return {}; }
+        };
+
         const mappedA: Record<string, string[]> = {
-          thought: thoughtsA.map((t: any) => JSON.stringify({ source: t.source, text: t.text, ts: t.created_at })),
-          envelope: envelopesA.filter((e: any) => e.type !== "EXECUTION").map((e: any) => {
-            const payload = JSON.parse(e.raw_payload);
-            return JSON.stringify({ 
-              type: e.type, 
-              traceId: e.trace_id, 
-              tool: payload.target?.tool_name || payload.params?.name || payload.tool_name,
-              cost: payload.params?._estimated_cost_usd || payload._estimated_cost_usd,
-              ts: e.created_at 
-            });
+          thought: thoughtsA.map((t: any) => JSON.stringify({ source: t.source ?? "bank-a", text: t.text, ts: t.created_at })),
+          envelope: envelopesA.filter((e: any) => e.type !== "EXECUTION").flatMap((e: any) => {
+            try {
+              const payload = safeParsePayload(e.raw_payload);
+              return [JSON.stringify({
+                type: e.type,
+                traceId: e.trace_id,
+                tool: payload.target?.tool_name || payload.params?.name || payload.tool_name,
+                cost: payload.params?._estimated_cost_usd || payload._estimated_cost_usd,
+                ts: e.created_at
+              })];
+            } catch { return []; }
           }),
-          "execution-complete": envelopesA.filter((e: any) => e.type === "EXECUTION").map((e: any) => {
-            const payload = JSON.parse(e.raw_payload);
-            return JSON.stringify({
-              traceId: e.trace_id,
-              status: payload.status,
-              ts: e.created_at
-            });
+          "execution-complete": envelopesA.filter((e: any) => e.type === "EXECUTION").flatMap((e: any) => {
+            try {
+              const payload = safeParsePayload(e.raw_payload);
+              return [JSON.stringify({
+                traceId: e.trace_id,
+                status: payload.status ?? "UNKNOWN",
+                ts: e.created_at
+              })];
+            } catch { return []; }
           })
         };
 
         const mappedB: Record<string, string[]> = {
-          thought: thoughtsB.map((t: any) => JSON.stringify({ source: t.source, text: t.text, ts: t.created_at })),
-          "intent-accepted": envelopesB.filter((e: any) => e.type === "ACCEPTANCE").map((e: any) => {
-             const payload = JSON.parse(e.raw_payload);
-             return JSON.stringify({ traceId: e.trace_id, ts: e.created_at });
+          thought: thoughtsB.map((t: any) => JSON.stringify({ source: t.source ?? "bank-b", text: t.text, ts: t.created_at })),
+          "intent-accepted": envelopesB.filter((e: any) => e.type === "ACCEPTANCE").flatMap((e: any) => {
+            try {
+              const payload = safeParsePayload(e.raw_payload);
+              const tool = payload.target?.tool_name || payload.params?.name;
+              const cost = payload.params?._estimated_cost_usd;
+              return [JSON.stringify({ traceId: e.trace_id, tool, cost, ts: e.created_at })];
+            } catch { return []; }
           }),
-          "intent-rejected": envelopesB.filter((e: any) => e.type === "DENIED").map((e: any) => {
-             const payload = JSON.parse(e.raw_payload);
-             const intent = envelopesB.find((env: any) => env.trace_id === e.trace_id && env.type === "INTENT");
-             const intentPayload = intent ? JSON.parse(intent.raw_payload) : {};
-             return JSON.stringify({ 
-               traceId: e.trace_id, 
-               reason: payload.error || (payload.content ? JSON.parse(payload.content).message : "Policy Rejection"),
-               tool: intentPayload.params?.name || intentPayload.target?.tool_name,
-               cost: intentPayload.params?._estimated_cost_usd,
-               ts: e.created_at 
-             });
+          "intent-rejected": envelopesB.filter((e: any) => e.type === "DENIED").flatMap((e: any) => {
+            try {
+              const payload = safeParsePayload(e.raw_payload);
+              const intent = envelopesB.find((env: any) => env.trace_id === e.trace_id && env.type === "INTENT");
+              const intentPayload = intent ? safeParsePayload(intent.raw_payload) : {};
+              let reason = payload.error;
+              if (!reason && payload.content) {
+                try { reason = JSON.parse(payload.content).message; } catch { reason = payload.content; }
+              }
+              return [JSON.stringify({
+                traceId: e.trace_id,
+                reason: reason || "Policy Rejection",
+                tool: intentPayload.params?.name || intentPayload.target?.tool_name,
+                cost: intentPayload.params?._estimated_cost_usd,
+                ts: e.created_at
+              })];
+            } catch { return []; }
           })
         };
 
@@ -141,7 +159,7 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
                     merkleRoot: a.merkle_root,
                     txHash: txHash,
                     blockNumber: a.block_number,
-                    basescanUrl: BASESCAN_TX_URL + txHash,
+                    basescanUrl: BASESCAN_TX_URL + (txHash.startsWith("0x") ? txHash.slice(2) : txHash),
                     ts: a.created_at
                   }));
                 });
