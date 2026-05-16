@@ -10,6 +10,7 @@ services:
       RPC_URL: "${RPC_URL}"
       PRIVATE_KEY: "${PRIVATE_KEY}"
       DB_PATH: "/data/bank-b.db"
+      PYTHONUNBUFFERED: "1"
     volumes:
       - bank-b-data:/data
 
@@ -66,6 +67,13 @@ services:
     environment:
       PROXY_A_URL: "http://bank-a-proxy:3001"
       PROXY_B_URL: "http://bank-b-proxy:3002"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      AGENT_MODEL_ID: "${AGENT_MODEL_ID:-ollama/qwen3.5:9b}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      PYTHONUNBUFFERED: "1"
+    command: python strands_agent.py
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       bank-a-proxy:
         condition: service_healthy
@@ -77,6 +85,14 @@ services:
     container_name: bank-b-agent
     environment:
       PROXY_B_URL: "http://bank-b-proxy:3002"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      AGENT_MODEL_ID: "${AGENT_MODEL_ID:-ollama/qwen3.5:9b}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      AGENT_PORT: "4002"
+      PYTHONUNBUFFERED: "1"
+    command: python decision_agent.py
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       bank-b-proxy:
         condition: service_healthy

@@ -1,9 +1,6 @@
 import { useRef, useEffect, useMemo, useState } from "react";
-import { useSSEMulti } from "../hooks/useSSEMulti";
+import { useSSE } from "../hooks/useSSE";
 import type { ThoughtEvent } from "../types";
-
-const PROXY_A = import.meta.env.VITE_PROXY_A_URL ?? "http://localhost:3001";
-const PROXY_B = import.meta.env.VITE_PROXY_B_URL ?? "http://localhost:3002";
 
 const BANK_A_COLOR = "#4caf50";
 const BANK_B_COLOR = "#ff9800";
@@ -22,17 +19,15 @@ type Mode = "thoughts" | "protocol";
 
 export function ThoughtStream({ resetToken = 0 }: { resetToken?: number }) {
   const [mode, setMode] = useState<Mode>("thoughts");
+  const { eventsA, eventsB } = useSSE();
 
-  const rawA = useSSEMulti(`${PROXY_A}/events`, ["thought", "envelope", "execution-complete"] as const, resetToken);
-  const rawB = useSSEMulti(`${PROXY_B}/events`, ["thought", "intent-accepted", "intent-rejected", "execution-complete"] as const, resetToken);
-
-  const thoughtsA = rawA["thought"] ?? [];
-  const thoughtsB = rawB["thought"] ?? [];
-  const envelopeA = rawA["envelope"] ?? [];
-  const execA     = rawA["execution-complete"] ?? [];
-  const acceptedB = rawB["intent-accepted"] ?? [];
-  const rejectedB = rawB["intent-rejected"] ?? [];
-  const execB     = rawB["execution-complete"] ?? [];
+  const thoughtsA = eventsA["thought"] ?? [];
+  const thoughtsB = eventsB["thought"] ?? [];
+  const envelopeA = eventsA["envelope"] ?? [];
+  const execA     = eventsA["execution-complete"] ?? [];
+  const acceptedB = eventsB["intent-accepted"] ?? [];
+  const rejectedB = eventsB["intent-rejected"] ?? [];
+  const execB     = eventsB["execution-complete"] ?? [];
 
   const thoughts = useMemo(() => {
     const a = thoughtsA.map((d) => { try { return JSON.parse(d) as ThoughtEvent; } catch { return null; } }).filter(Boolean) as ThoughtEvent[];

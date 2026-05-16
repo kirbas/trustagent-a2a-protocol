@@ -1,1 +1,6 @@
 requests==2.31.0
+strands-agents
+python-dotenv
+flask
+ollama
+anthropic

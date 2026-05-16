@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { useSSEMulti } from "../hooks/useSSEMulti";
+import { useSSE } from "../hooks/useSSE";
 import type { HandshakeEvent, AnchorEvent } from "../types";
 
 const PROXY_A = import.meta.env.VITE_PROXY_A_URL ?? "http://localhost:3001";
@@ -41,24 +41,17 @@ export function HandshakeVisualizer({
   onReset: () => void;
 }) {
   const [running, setRunning] = useState(false);
+  const { eventsA, eventsB } = useSSE();
 
-  const proxyA = useSSEMulti(`${PROXY_A}/events`, [
-    "demo-triggered", "execution-complete", "envelope",
-  ] as const, resetToken);
-  const proxyB = useSSEMulti(`${PROXY_B}/events`, [
-    "execution-complete", "anchor-pending", "anchor-complete",
-    "anchor-failed", "intent-accepted", "intent-rejected",
-  ] as const, resetToken);
-
-  const demoRaw          = proxyA["demo-triggered"]    ?? [];
-  const execARaw         = proxyA["execution-complete"] ?? [];
-  const envelopeARaw     = proxyA["envelope"]           ?? [];
-  const execBRaw         = proxyB["execution-complete"] ?? [];
-  const anchorPendingRaw = proxyB["anchor-pending"]     ?? [];
-  const anchorCompleteRaw= proxyB["anchor-complete"]    ?? [];
-  const anchorFailedRaw  = proxyB["anchor-failed"]      ?? [];
-  const acceptedRaw      = proxyB["intent-accepted"]    ?? [];
-  const rejectedRaw      = proxyB["intent-rejected"]    ?? [];
+  const demoRaw          = eventsA["demo-triggered"]    ?? [];
+  const execARaw         = eventsA["execution-complete"] ?? [];
+  const envelopeARaw     = eventsA["envelope"]           ?? [];
+  const execBRaw         = eventsB["execution-complete"] ?? [];
+  const anchorPendingRaw = eventsB["anchor-pending"]     ?? [];
+  const anchorCompleteRaw= eventsB["anchor-complete"]    ?? [];
+  const anchorFailedRaw  = eventsB["anchor-failed"]      ?? [];
+  const acceptedRaw      = eventsB["intent-accepted"]    ?? [];
+  const rejectedRaw      = eventsB["intent-rejected"]    ?? [];
 
   useEffect(() => {
     if (demoRaw.length > 0) setRunning(true);

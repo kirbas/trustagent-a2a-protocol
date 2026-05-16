@@ -235,7 +235,8 @@ export class ProxyBGateway {
 
   async handleIntent(
     intent: IntentEnvelope,
-    estimatedCostUsd = 0
+    estimatedCostUsd = 0,
+    manualRejection?: { reason: string; errorCode: number }
   ): Promise<AcceptResult> {
 
     // Always record the intent first — provides an audit trail even for rejections
@@ -253,6 +254,10 @@ export class ProxyBGateway {
       this.cfg.ledger.append("ACCEPTANCE_RECORD", denial, [intentEntry.entry_hash]);
       return { error, errorCode, denial };
     };
+
+    if (manualRejection) {
+      return deny(manualRejection.reason, manualRejection.errorCode);
+    }
 
     // 1. TTL check
     if (!this.cfg.nonceRegistry.checkExpiry(intent.expires_at)) {

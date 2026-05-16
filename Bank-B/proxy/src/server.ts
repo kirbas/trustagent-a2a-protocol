@@ -50,9 +50,9 @@ function initProxyB(proxyBKey: Awaited<ReturnType<typeof generateKeyPair>>, prox
   budgetEngine = new RiskBudgetEngine();
   budgetEngine.registerPolicy({
     did: BANK_A_DID,
-    maxSingleActionUsd: 10_000,
-    dailyBudgetUsd: 10_000,
-    allowedTools: ["get_security_report", "execute_wire_transfer"],
+    maxSingleActionUsd: 1_000_000, // Loosened: Agent decides
+    dailyBudgetUsd: 1_000_000, // Loosened: Agent decides
+    allowedTools: ["get_security_report", "security_posture_report", "get_security_posture_report", "get_document", "execute_wire_transfer"],
   });
   proxyB = new ProxyBGateway({
     proxyKey: proxyBKey,
@@ -168,7 +168,28 @@ async function main(): Promise<void> {
     const tool = intent.target?.tool_name;
     const traceId = intent.trace_id;
 
-    const result = await proxyB.handleIntent(intent, estimated_cost_usd);
+    // ── Call Bank-B Decision Agent (Real Agent Loop) ──
+    let manualRejection: { reason: string; errorCode: number } | undefined;
+    try {
+      const agentResp = await fetch("http://bank-b-agent:4002/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent, cost: estimated_cost_usd })
+      });
+      if (agentResp.ok) {
+        const decision = await agentResp.json() as { decision: string, reason: string, errorCode?: string };
+        if (decision.decision === "reject") {
+          manualRejection = {
+            reason: decision.reason,
+            errorCode: decision.errorCode === "ERR_BUDGET_EXCEEDED" ? -32002 : -32001
+          };
+        }
+      }
+    } catch (err) {
+      console.error("[bank-b-proxy] Decision Agent unreachable, falling back to static policy:", err);
+    }
+
+    const result = await proxyB.handleIntent(intent, estimated_cost_usd, manualRejection);
 
     if (result.error || !result.acceptance) {
       saveEnvelope(traceId + ":intent", "INTENT", traceId, intent, JSON.stringify(intent.signatures));
