@@ -1,8 +1,9 @@
 /// <reference types="vite/client" />
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { getProxyUrl } from "../utils/urls";
 
 type Status = "connecting" | "connected" | "error";
+type SystemPhase = "IDLE" | "RUNNING";
 
 interface SSEContextType {
   eventsA: Record<string, string[]>;
@@ -10,6 +11,7 @@ interface SSEContextType {
   statusA: Status;
   statusB: Status;
   health: Record<string, Status>;
+  systemPhase: SystemPhase;
 }
 
 const SSEContext = createContext<SSEContextType | null>(null);
@@ -21,6 +23,19 @@ const AGENT_B = getProxyUrl(4002);
 const ANCHOR  = getProxyUrl(5001);
 
 const BASESCAN_TX_URL = "https://sepolia.basescan.org/address/0x";
+
+// Defensive JSON parser
+const safeParse = (raw: string): any => {
+  try { return JSON.parse(raw); } catch { return {}; }
+};
+
+// Trace ID normalizer (ensures URN/UUID consistency)
+const normalizeTraceId = (tid: string | undefined): string => {
+  if (!tid) return "";
+  if (tid.startsWith("urn:uuid:")) return tid;
+  if (tid.startsWith("uuid:")) return tid.replace("uuid:", "urn:uuid:");
+  return `urn:uuid:${tid}`;
+};
 
 export function SSEProvider({ children, resetToken = 0 }: { children: React.ReactNode; resetToken?: number }) {
   const [eventsA, setEventsA] = useState<Record<string, string[]>>({});
@@ -34,14 +49,19 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
     "Bank-B Agent": "connecting",
     "Bank-B Anchor": "connecting",
   });
+  const [systemPhase, setSystemPhase] = useState<SystemPhase>("IDLE");
+
+  const pushEvent = useCallback((set: React.Dispatch<React.SetStateAction<Record<string, string[]>>>, name: string, data: string) => {
+    set(prev => ({ ...prev, [name]: [...(prev[name] ?? []), data] }));
+  }, []);
 
   useEffect(() => {
     setEventsA({});
     setEventsB({});
     setStatusA("connecting");
     setStatusB("connecting");
+    setSystemPhase("IDLE");
 
-    // Poll health
     const pollHealth = async () => {
       const check = async (url: string) => {
         try {
@@ -51,18 +71,12 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
       };
 
       const [hA, hB, hAgA, hAgB, hAnc] = await Promise.all([
-        check(PROXY_A),
-        check(PROXY_B),
-        check(AGENT_A),
-        check(AGENT_B),
-        check(ANCHOR),
+        check(PROXY_A), check(PROXY_B), check(AGENT_A), check(AGENT_B), check(ANCHOR),
       ]);
 
       setHealth({
-        "Bank-A Proxy": hA as Status,
-        "Bank-B Proxy": hB as Status,
-        "Bank-A Agent": hAgA as Status,
-        "Bank-B Agent": hAgB as Status,
+        "Bank-A Proxy": hA as Status, "Bank-B Proxy": hB as Status,
+        "Bank-A Agent": hAgA as Status, "Bank-B Agent": hAgB as Status,
         "Bank-B Anchor": hAnc as Status,
       });
       setStatusA(hA as Status);
@@ -72,7 +86,6 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
     const timer = setInterval(pollHealth, 5000);
     pollHealth();
 
-    // Fetch history
     const fetchHistory = async () => {
       try {
         const [thoughtsA, envelopesA, thoughtsB, envelopesB, anchorsB] = await Promise.all([
@@ -83,63 +96,44 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
           fetch(`${PROXY_B}/anchors`).then(r => r.json()).catch(() => []),
         ]);
 
-        const safeParsePayload = (raw: string): any => {
-          try { return JSON.parse(raw); } catch { return {}; }
-        };
-
         const mappedA: Record<string, string[]> = {
-          thought: thoughtsA.map((t: any) => JSON.stringify({ source: t.source ?? "bank-a", text: t.text, ts: t.created_at })),
-          envelope: envelopesA.filter((e: any) => e.type !== "EXECUTION").flatMap((e: any) => {
-            try {
-              const payload = safeParsePayload(e.raw_payload);
-              return [JSON.stringify({
-                type: e.type,
-                traceId: e.trace_id,
-                tool: payload.target?.tool_name || payload.params?.name || payload.tool_name,
-                cost: payload.params?._estimated_cost_usd || payload._estimated_cost_usd,
-                ts: e.created_at
-              })];
-            } catch { return []; }
+          thought: thoughtsA.map((t: any) => JSON.stringify({ source: t.source, text: t.text, ts: t.created_at })),
+          envelope: envelopesA.filter((e: any) => e.type !== "EXECUTION").map((e: any) => {
+            const payload = safeParse(e.raw_payload);
+            return JSON.stringify({ 
+              type: e.type, 
+              traceId: normalizeTraceId(e.trace_id), 
+              tool: payload.target?.tool_name || payload.params?.name || payload.tool_name,
+              cost: payload.params?._estimated_cost_usd || payload._estimated_cost_usd,
+              ts: e.created_at 
+            });
           }),
-          "execution-complete": envelopesA.filter((e: any) => e.type === "EXECUTION").flatMap((e: any) => {
-            try {
-              const payload = safeParsePayload(e.raw_payload);
-              return [JSON.stringify({
-                traceId: e.trace_id,
-                status: payload.status ?? "UNKNOWN",
-                ts: e.created_at
-              })];
-            } catch { return []; }
+          "execution-complete": envelopesA.filter((e: any) => e.type === "EXECUTION").map((e: any) => {
+            const payload = safeParse(e.raw_payload);
+            return JSON.stringify({
+              traceId: normalizeTraceId(e.trace_id),
+              status: payload.status,
+              ts: e.created_at
+            });
           })
         };
 
         const mappedB: Record<string, string[]> = {
-          thought: thoughtsB.map((t: any) => JSON.stringify({ source: t.source ?? "bank-b", text: t.text, ts: t.created_at })),
-          "intent-accepted": envelopesB.filter((e: any) => e.type === "ACCEPTANCE").flatMap((e: any) => {
-            try {
-              const payload = safeParsePayload(e.raw_payload);
-              const tool = payload.target?.tool_name || payload.params?.name;
-              const cost = payload.params?._estimated_cost_usd;
-              return [JSON.stringify({ traceId: e.trace_id, tool, cost, ts: e.created_at })];
-            } catch { return []; }
+          thought: thoughtsB.map((t: any) => JSON.stringify({ source: t.source, text: t.text, ts: t.created_at })),
+          "intent-accepted": envelopesB.filter((e: any) => e.type === "ACCEPTANCE").map((e: any) => {
+             return JSON.stringify({ traceId: normalizeTraceId(e.trace_id), ts: e.created_at });
           }),
-          "intent-rejected": envelopesB.filter((e: any) => e.type === "DENIED").flatMap((e: any) => {
-            try {
-              const payload = safeParsePayload(e.raw_payload);
-              const intent = envelopesB.find((env: any) => env.trace_id === e.trace_id && env.type === "INTENT");
-              const intentPayload = intent ? safeParsePayload(intent.raw_payload) : {};
-              let reason = payload.error;
-              if (!reason && payload.content) {
-                try { reason = JSON.parse(payload.content).message; } catch { reason = payload.content; }
-              }
-              return [JSON.stringify({
-                traceId: e.trace_id,
-                reason: reason || "Policy Rejection",
-                tool: intentPayload.params?.name || intentPayload.target?.tool_name,
-                cost: intentPayload.params?._estimated_cost_usd,
-                ts: e.created_at
-              })];
-            } catch { return []; }
+          "intent-rejected": envelopesB.filter((e: any) => e.type === "DENIED").map((e: any) => {
+             const payload = safeParse(e.raw_payload);
+             const intent = envelopesB.find((env: any) => env.trace_id === e.trace_id && env.type === "INTENT");
+             const intentPayload = intent ? safeParse(intent.raw_payload) : {};
+             return JSON.stringify({ 
+               traceId: normalizeTraceId(e.trace_id), 
+               reason: payload.error || (payload.content ? safeParse(payload.content).message : "Policy Rejection"),
+               tool: intentPayload.params?.name || intentPayload.target?.tool_name,
+               cost: intentPayload.params?._estimated_cost_usd,
+               ts: e.created_at 
+             });
           })
         };
 
@@ -151,7 +145,7 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
               const leavesResp = await fetch(`${PROXY_B}/verify/${a.tx_hash}`);
               if (leavesResp.ok) {
                 const leafData = await leavesResp.json();
-                const uniqueTraces = [...new Set(leafData.leaves.map((l: any) => l.traceId).filter(Boolean))];
+                const uniqueTraces = [...new Set(leafData.leaves.map((l: any) => normalizeTraceId(l.traceId)).filter(Boolean))];
                 uniqueTraces.forEach(tid => {
                   const txHash = a.tx_hash.startsWith("0x") ? a.tx_hash : "0x" + a.tx_hash;
                   anchorEvents.push(JSON.stringify({
@@ -159,7 +153,7 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
                     merkleRoot: a.merkle_root,
                     txHash: txHash,
                     blockNumber: a.block_number,
-                    basescanUrl: BASESCAN_TX_URL + (txHash.startsWith("0x") ? txHash.slice(2) : txHash),
+                    basescanUrl: BASESCAN_TX_URL + txHash,
                     ts: a.created_at
                   }));
                 });
@@ -173,7 +167,7 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
         setEventsB(mappedB);
         
         if (envelopesA.length > 0) {
-           setEventsA(prev => ({ ...prev, "demo-triggered": [JSON.stringify({ ts: new Date().toISOString() })] }));
+           setSystemPhase("RUNNING");
         }
 
       } catch (err) {
@@ -197,16 +191,26 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
       const allEvents = [
         "thought", "envelope", "execution-complete", "demo-triggered", 
         "intent-accepted", "intent-rejected", "anchor-pending", 
-        "anchor-complete", "anchor-failed"
+        "anchor-complete", "anchor-failed", "system-phase"
       ];
       
       allEvents.forEach(name => {
         es.addEventListener(name, (e: MessageEvent) => {
           console.log(`[sse] event received: ${label} -> ${name}`);
-          set(prev => ({
-            ...prev,
-            [name]: [...(prev[name] ?? []), e.data]
-          }));
+          
+          if (name === "system-phase") {
+            const data = safeParse(e.data);
+            if (data.phase === "RUNNING") setSystemPhase("RUNNING");
+            return;
+          }
+
+          pushEvent(set, name, e.data);
+          
+          // Phase transition on INTENT envelope
+          if (name === "envelope") {
+            const data = safeParse(e.data);
+            if (data.type === "INTENT") setSystemPhase("RUNNING");
+          }
         });
       });
     };
@@ -219,10 +223,10 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
       esA.close();
       esB.close();
     };
-  }, [resetToken]);
+  }, [resetToken, pushEvent]);
 
   return (
-    <SSEContext.Provider value={{ eventsA, eventsB, statusA, statusB, health }}>
+    <SSEContext.Provider value={{ eventsA, eventsB, statusA, statusB, health, systemPhase }}>
       {children}
     </SSEContext.Provider>
   );
