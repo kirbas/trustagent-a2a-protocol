@@ -17,6 +17,7 @@ export class SseBus {
   }
 
   broadcast(event: string, data: unknown): void {
+    console.log(`[sse] broadcasting event: ${event}`);
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     this.clients.forEach((c) => c.write(payload));
   }

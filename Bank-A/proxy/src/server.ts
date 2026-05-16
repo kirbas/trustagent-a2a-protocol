@@ -31,6 +31,19 @@ let triggered = false;
 
 async function main(): Promise<void> {
   const proxyKey = await generateKeyPair(PROXY_KID);
+
+  // Auto-register with Proxy B for the demo
+  try {
+    const BANK_A_DID = "did:workload:bank-a-proxy";
+    await registerWithProxyB(
+      PROXY_B_URL,
+      `${BANK_A_DID}#key-1`,
+      Buffer.from(proxyKey.publicKey).toString("hex")
+    );
+  } catch (e) {
+    console.warn("[key-exchange] registration failed", e);
+  }
+
   initDb(DB_PATH);
   const sseBus = new SseBus();
 
@@ -135,10 +148,10 @@ async function main(): Promise<void> {
   });
 
   app.post("/invoke", async (req, res) => {
-    const { tool, args, cost } = req.body as {
+    const { tool, args = {}, cost = 0 } = req.body as {
       tool: string;
-      args: Record<string, unknown>;
-      cost: number;
+      args?: Record<string, unknown>;
+      cost?: number;
     };
     const sha256str = (s: string) => createHash("sha256").update(s).digest("hex");
 
