@@ -1,155 +1,68 @@
-# TrustAgentAI — Procurement Handshake Demo
+# TrustAgentAI — Autonomous Procurement Handshake
 
-A Dockerized, multi-node demonstration of the A2A Accountability Protocol. Two autonomous bank nodes perform a cryptographically accountable procurement handshake, with a real-time React visualizer and SQLite-backed tamper-evident ledger.
-
----
-
-## Quick Start
-
-```bash
-git clone <repo>
-cd Trust-Agent
-
-docker compose up --build
-```
-
-> **Blockchain anchoring** requires `RPC_URL` and `PRIVATE_KEY` in a root `.env` file (see `.env.example`). Without them anchoring is silently skipped — the demo still runs fully.
-
-Open **http://localhost:3000** and press **▶ Start Demo**.
-
-Docker builds from scratch take ~4 minutes (compiling native `better-sqlite3`). Subsequent builds are cached.
+A production-grade demonstration of the **A2A Accountability Protocol**. This demo features real, live autonomous agents performing cryptographically binding handshakes on a tamper-evident ledger.
 
 ---
 
-## What the Demo Shows
+## 🚀 Quick Start
 
-### Scenario 1 — Successful $5k Procurement
-1. `bank-a-agent` (Purchaser) requests a Security Report from `bank-b-node` for $5,000
-2. `bank-a-proxy` builds a signed `IntentEnvelope` and POSTs it to `bank-b-proxy`
-3. `bank-b-proxy` validates: TTL → nonce uniqueness → Ed25519 signature → risk budget ($10k daily limit allows it)
-4. `bank-b-proxy` returns a signed `AcceptanceReceipt` (decision: `ACCEPTED`)
-5. `bank-a-proxy` executes the tool (stub returning a mock PDF), builds `ExecutionEnvelope`
-6. Both proxies persist all three signed artifacts to their SQLite `envelopes` table
-7. `bank-a-proxy` generates a `ContentProvenanceReceipt` (v0.5) binding the output to the trace
-8. All thought logs and handshake steps stream live to the frontend
-9. `bank-b-proxy` computes a SHA-256 Merkle root over the last batch of envelope signatures and broadcasts it to Base Sepolia as a 0-ETH self-transaction (`runAnchor`)
-10. HandshakeVisualizer shows "ANCHORING ⏳" → "ANCHORED ⛓ block N ↗" (BaseScan link); trace border turns amber (orange)
-11. Bilateral confirmation: "EXECUTED (A) ✓" and "EXECUTED (B) ✓" visible to confirm both ledgers are in sync.
+1. **Clone and Configure**:
+   ```bash
+   git clone <repo>
+   cd Trust-Agent
+   # Add RPC_URL and PRIVATE_KEY to .env for blockchain anchoring (optional)
+   ```
 
-### Scenario 2 — Blocked $50k Breach
-1. `bank-a-agent` autonomously attempts a $50,000 wire transfer
-2. `bank-b-proxy` rejects at step 4 (`ERR_BUDGET_EXCEEDED`) — cost exceeds `maxSingleActionUsd: $10,000`
-3. The intent is recorded in the DAG ledger; a signed `AcceptanceReceipt` with `decision: "REJECTED"` is appended and written to `bank-b`'s SQLite
-4. The frontend HandshakeVisualizer shows the red `REJECTED` badge
-5. Non-repudiation is preserved: the rejection is cryptographically signed by Bank-B proxy; the Dispute Pack for this trace is populated (INTENT_RECORD + ACCEPTANCE_RECORD)
-6. `bank-b-proxy` also fires `runAnchor` for the rejected trace — the denial is immutably timestamped on-chain alongside successful transactions
+2. **Launch Infrastructure**:
+   ```bash
+   docker compose up --build
+   ```
+
+3. **Trigger the Loop**:
+   Open **[http://localhost:3000](http://localhost:3000)** and click the **🚀 START DEMO** button in the header.
 
 ---
 
-## Ports
+## 🏗 Key Architectural Pillars
 
-| Service | Host Port | Purpose |
-|---|---|---|
-| `frontend` | **3000** | React visualizer (nginx) |
-| `bank-a-proxy` | **3001** | Proxy A HTTP API |
-| `bank-b-proxy` | **3002** | Proxy B HTTP API |
-| `bank-b-anchor` | **5001** | Bank-B L2 Notary Service |
+### 1. Real Autonomous Agents
+The system has transitioned from mock simulations to real **Strands/AO Agent** runtimes. Agents autonomously negotiate procurement scenarios, emit real-time "Thought Streams," and handle cryptographic signing in-loop.
 
----
+### 2. SQLite with WAL (Write-Ahead Logging)
+High-concurrency is achieved via SQLite's WAL mode. Handshake records are written to the ledger simultaneously with real-time UI hydration, eliminating database locking issues during intensive agent activity.
 
-## Frontend Panels
-
-### Agent Thought Stream (left)
-Live interleaved thought logs from both agents, color-coded by node (green = Bank-A, orange = Bank-B). The agent logic is **reasoning-forward**: surfacing internal verifications and cryptographic expectations.
-- **Protocol Toggle**: Switch to "Protocol" mode to view a live, terminal-style log of raw A2A envelope traffic (Intent, Acceptance, Execution) with timing and trace IDs.
-
-### Bilateral Handshake (centre)
-Step timeline per `trace_id`. 
-- **Zero State**: Shows the **Handshake Tutorial**, a visual guide explaining the 3-phase A2A protocol (Intent → Acceptance → Execution).
-- **Error Boundaries**: If a node goes offline, the panel displays a "Node Offline" warning instead of crashing.
-- **Handshake badges**: `INTENT` → `ACCEPTED` → `EXECUTED (A/B)` → `PROVENANCE`.
-- All trace IDs are clean UUIDs. Panels are perfectly aligned with 84px headers.
-
-### Dispute Console (right)
-Multiple specialized tabs for forensic audit:
-
-**Envelopes tab** — polls `/envelopes` every 3 s. Click any row to expand its raw JSON.
-
-**Dispute Pack tab** — select a `trace_id` to load its **Evidence Bundle**:
-- **Causal Chain**: Visualizes the cryptographic link from [INTENT] through [ACCEPTANCE] to [EXECUTION].
-- **Forensic Detail**: Syntax-highlighted, collapsible JSON viewer. Signature keys are amber, hashes purple, and protocol fields green.
-- **Flush + Load**: Forces a Merkle batch commit before loading proofs.
-
-**Anchor to L2 tab** — trigger Merkle notarization via `POST /anchor`.
-
-**Verify Anchor tab** — blockchain proof verification:
-- Paste Base Sepolia tx hash → **Verify** calls `GET /verify/:txHash`.
-- Shows leaf-by-leaf validity (✓ / ✗) and full forensic JSON.
-
-**Provenance Verifier tab** — NEW:
-- Drag and drop a received file (e.g., the security report) to verify its integrity locally. The browser computes the SHA-256 hash and compares it against the anchored `content_hash` in the ledger.
-
-**Cross-Check tab** — bilateral integrity verification:
-- Ensures Bank-A and Bank-B possess identical execution envelopes for a given trace.
+### 3. Hybrid SSE/DB Streaming
+Live agent reasoning and protocol events are broadcast via **Server-Sent Events (SSE)** for zero-latency visualization, while being concurrently persisted to the SQLite ledger for permanent forensic audit.
 
 ---
 
-## Verifying the Demo
+## 🎨 Visualizer Features
 
-```bash
-# Check key exchange succeeded
-docker logs bank-a-proxy | grep "registered with Proxy B"
+### Agent Thought Stream (Left)
+- **Live Reasoning**: X-ray visibility into the agent's internal reasoning loop.
+- **Protocol Mode**: Terminal-style view of raw cryptographic envelope traffic.
+- **Defensive Parsing**: React boundaries protect the UI from malformed or unstructured agent outputs.
 
-# Check acceptance/rejection in Bank-B
-docker logs bank-b-proxy | grep -E "ACCEPTED|REJECTED"
+### Bilateral Handshake (Center)
+- **Trace Timelines**: Real-time visualization of the 3-phase handshake (Intent → Acceptance → Execution).
+- **L2 Anchoring**: Watch as transactions are batched, Merkle-hashed, and anchored to **Base Sepolia**.
+- **Blockchain Links**: Direct links to **BaseScan** for every anchored transaction.
 
-# Query SQLite directly
-docker exec bank-b-proxy sqlite3 /data/bank-b.db "SELECT type, trace_id, created_at FROM envelopes;"
-
-# Hit the dispute pack API manually
-curl -s http://localhost:3002/dispute/<traceId> | python3 -m json.tool
-
-# Force flush then re-query
-curl -X POST http://localhost:3002/flush
-curl -s http://localhost:3002/dispute/<traceId> | python3 -m json.tool
-
-# Check blockchain anchor status in Bank-A
-docker exec bank-a-proxy sqlite3 /data/bank-a.db "SELECT batch_id, status, block_number FROM anchors;"
-
-# Verify a dispute pack by tx hash
-curl -s http://localhost:3001/verify/0x<txHash> | python3 -m json.tool
-```
+### Forensic Dispute Console (Right)
+- **Dispute Packs**: Download full forensic bundles containing signed records and Merkle inclusion proofs.
+- **Provenance Verifier**: Drag-and-drop tool outputs to verify their integrity against the anchored content hash.
+- **Cross-Check**: Validate that both Bank-A and Bank-B hold identical records for any given trace.
 
 ---
 
-## Re-running Scenarios
-
-Click **↺ Clear messages and restart demo** in the Bilateral Handshake panel — it resets both proxies (in-memory state + SQLite) and clears all frontend panels without restarting containers. The agent automatically waits for the next trigger.
-
-To reset all state including keys and volumes:
-```bash
-docker compose down -v   # removes named volumes
-docker compose up --build
-```
+## 🛡 Security & Compliance
+- **RFC 8785 (JCS)**: Deterministic JSON canonicalization for all hashing.
+- **Ed25519 Signatures**: Every record is signed by the originating node's proxy.
+- **Merkle Proofs**: Mathematical proof that a specific transaction was included in a blockchain-anchored batch.
 
 ---
 
-## Project Structure
-
-```
-Trust-Agent/
-├── trust-agent/          Core @trustagentai/a2a-core library (DO NOT MODIFY)
-├── Bank-A/
-│   ├── proxy/            TypeScript/Express Proxy A
-│   ├── agent/            Python autonomous purchaser agent
-│   └── merkle-anchor/    Python DDD service: standalone Merkle anchor CLI
-├── Bank-B/
-│   ├── proxy/            TypeScript/Express Proxy B
-│   └── agent/            Python reactive vendor agent
-├── frontend/             React/Vite visualizer (served by nginx)
-├── docs/                 This documentation
-└── docker-compose.yml    5-service orchestration
-```
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed technical design.
-See [AGENT_CONTEXT.md](AGENT_CONTEXT.md) for AI agent continuation context.
+## 📝 Documentation
+- **[ARCHITECTURE.md](ARCHITECTURE.md)**: Detailed system design and data flow.
+- **[AGENT_CONTEXT.md](AGENT_CONTEXT.md)**: Critical technical context for developers and AI agents.
+- **[CHANGELOG.md](../CHANGELOG.md)**: Recent updates and version history.

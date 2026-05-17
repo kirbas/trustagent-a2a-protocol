@@ -1,5 +1,21 @@
 # Changelog - ikarin-develop Branch
 
+## [Autonomous Agent Integration & Production Hardening] - 2026-05-16
+
+### 🚀 Real Autonomous Agents
+- **Strands/AO Integration**: Transitioned from mock simulations to real autonomous agent runtimes in `Bank-A` and `Bank-B`.
+- **Reasoning-Forward Loops**: Agents now perform internal reasoning before issuing tool calls, logging their logic directly to the live "Thought Stream."
+- **Defensive UI Boundaries**: Implemented robust parsing boundaries in the React frontend to handle variable or unstructured agent outputs without crashing.
+
+### 🛡️ Infrastructure & Performance
+- **SQLite WAL Mode**: Configured all databases for **Write-Ahead Logging (`PRAGMA journal_mode = WAL;`)**, enabling high-frequency agent writes to occur simultaneously with active user reads.
+- **Hybrid SSE Transport**: Unified thoughts and cryptographic signatures into a single real-time SSE pipeline, while ensuring parallel persistence to the SQLite ledger.
+- **Trace Normalization**: Standardized `trace_id` formats as URN UUIDs across all distributed nodes for seamless forensic correlation.
+
+### 📝 Documentation Overhaul
+- **Comprehensive Update**: Rewrote `README.md`, `ARCHITECTURE.md`, `AGENT_CONTEXT.md`, and `AGENT_WORKFLOW.md` to reflect the latest production-ready architecture.
+- **Verification Proofs**: Documented the construction and validation of compliance **Dispute Packs** containing Merkle inclusion proofs.
+
 ## [Merkle Notary Stabilization & UI v2] - 2026-05-05
 
 ### 🚀 New Features (Forensic UI & Protocol)

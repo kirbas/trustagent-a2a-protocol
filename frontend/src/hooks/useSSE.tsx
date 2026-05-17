@@ -22,7 +22,7 @@ const AGENT_A = getProxyUrl(4001);
 const AGENT_B = getProxyUrl(4002);
 const ANCHOR  = getProxyUrl(5001);
 
-const BASESCAN_TX_URL = "https://sepolia.basescan.org/address/0x";
+const BASESCAN_TX_URL = "https://sepolia.basescan.org/tx/";
 
 // Defensive JSON parser
 const safeParse = (raw: string): any => {
@@ -153,7 +153,7 @@ export function SSEProvider({ children, resetToken = 0 }: { children: React.Reac
                     merkleRoot: a.merkle_root,
                     txHash: txHash,
                     blockNumber: a.block_number,
-                    basescanUrl: BASESCAN_TX_URL + txHash,
+                    basescanUrl: BASESCAN_TX_URL + txHash,   // tx/ + 0xABC = correct
                     ts: a.created_at
                   }));
                 });
