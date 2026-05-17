@@ -107,9 +107,9 @@ async function main(): Promise<void> {
 
     try {
       const localEnvelopes = getEnvelopesByTraceId(traceId) as Array<{ type: string; raw_payload: string; signature: string }>;
-      const response = await fetch(`${PROXY_B_URL}/envelopes-by-trace/${traceId}`);
+      const response = await fetch(`${PROXY_B_URL}/envelopes-by-trace/${encodeURIComponent(traceId)}`);
       if (!response.ok) {
-        res.status(500).json({ error: "Failed to fetch envelopes from Proxy B" });
+        res.status(500).json({ error: `Proxy B returned ${response.status} for trace ${traceId}` });
         return;
       }
       const remoteEnvelopes = await response.json() as Array<{ type: string; raw_payload: string; signature: string }>;
@@ -123,16 +123,25 @@ async function main(): Promise<void> {
         const local = localMap.get(type);
         const remote = remoteMap.get(type);
         if (!local || !remote) {
-          return { type, match: false, reason: `Missing in ${!local ? 'Bank-A' : 'Bank-B'}` };
+          return { type, match: false, reason: `Missing in ${!local ? "Bank-A" : "Bank-B"}` };
         }
         if (local.raw_payload !== remote.raw_payload) {
-          return { type, match: false, reason: "Payload mismatch" };
+          let debug = "payload differs";
+          try {
+            const lp = JSON.parse(local.raw_payload);
+            const rp = JSON.parse(remote.raw_payload);
+            const lSigs = lp.signatures?.length ?? 0;
+            const rSigs = rp.signatures?.length ?? 0;
+            if (lSigs !== rSigs) debug = `sig count: Bank-A=${lSigs} Bank-B=${rSigs}`;
+            else debug = `sig count matches (${lSigs}) — content differs`;
+          } catch { /* keep default */ }
+          return { type, match: false, reason: `Payload mismatch — ${debug}` };
         }
         return { type, match: true, reason: "Synced" };
       });
 
       const synced = details.every((d) => d.match);
-      res.json({ synced, details });
+      res.json({ synced, details, localCount: localEnvelopes.length, remoteCount: remoteEnvelopes.length });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

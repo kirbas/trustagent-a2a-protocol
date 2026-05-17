@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { useSSE } from "../hooks/useSSE";
 import type { HandshakeEvent, AnchorEvent } from "../types";
-
+import { HandshakeTutorial } from "./HandshakeTutorial";
 import { getProxyUrl } from "../utils/urls";
 
 const PROXY_A = getProxyUrl(3001, import.meta.env.VITE_PROXY_A_URL);
@@ -19,6 +19,8 @@ interface Trace {
   tool: string;
   cost: number;
   steps: TraceStep[];
+  basescanUrl?: string;
+  blockNumber?: number;
 }
 
 function parseAll(raws: string[]): HandshakeEvent[] {
@@ -36,6 +38,34 @@ function parseAnchors(raws: string[]): AnchorEvent[] {
 }
 
 const stripId = (id: string | null | undefined) => id ? id.replace(/^urn:uuid:/, "") : "";
+
+function TraceIdRow({ traceId }: { traceId: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(traceId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4 }}>
+      <span style={{ color: "#2a2a3a", fontSize: 9, fontFamily: "monospace", letterSpacing: 0.2, userSelect: "all" }}>
+        {traceId}
+      </span>
+      <button
+        onClick={copy}
+        title={copied ? "Copied!" : "Copy trace ID"}
+        style={{
+          background: "transparent", border: "none", cursor: "pointer",
+          padding: "0 2px", color: copied ? "#4caf50" : "#333",
+          fontSize: 11, lineHeight: 1, flexShrink: 0,
+        }}
+      >
+        {copied ? "✓" : "⎘"}
+      </button>
+    </div>
+  );
+}
 
 export function HandshakeVisualizer({
   resetToken = 0,
@@ -105,7 +135,8 @@ export function HandshakeVisualizer({
     parseAll(execARaw).forEach((e) => {
       if (!e.traceId) return;
       const t = addOrGet(e.traceId);
-      t.steps.push({ label: `EXECUTED (A) ${e.status === "SUCCESS" ? "✓" : "✗"}`, ok: e.status === "SUCCESS" });
+      const isSuccess = e.status === "SUCCESS" || e.status === "COMPLETED";
+      t.steps.push({ label: `EXECUTED (A) ${isSuccess ? "✓" : "✗"}`, ok: isSuccess });
     });
 
     // 4. Process Anchoring (Bank-B)
@@ -121,11 +152,9 @@ export function HandshakeVisualizer({
       if (!e.traceId) return;
       const t = addOrGet(e.traceId);
       t.steps = t.steps.filter(s => !s.pending && !s.label.startsWith("ANCHOR"));
-      t.steps.push({
-        label: `ANCHORED (B) ⛓ block ${e.blockNumber || ""}`,
-        ok: true,
-        basescanUrl: e.basescanUrl
-      });
+      t.steps.push({ label: `ANCHORED (B) ⛓ block ${e.blockNumber || ""}`, ok: true });
+      if (e.basescanUrl) t.basescanUrl = e.basescanUrl;
+      if (e.blockNumber) t.blockNumber = e.blockNumber;
     });
 
     parseAnchors(anchorFailedRaw).forEach((e: any) => {
@@ -206,23 +235,29 @@ export function HandshakeVisualizer({
 
       <div style={{ flex: 1, overflowY: "auto", padding: "12px", position: "relative" }}>
         {traces.length === 0 ? (
-          <div
-            style={{
-              height: "100%",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 20,
-            }}
-          >
-            <div style={{ fontSize: 40, filter: "grayscale(1) opacity(0.3)" }}>🤝</div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-               <div style={{ fontSize: 11, color: "#444", textAlign: "center" }}>
-                 System idle. Waiting for autonomous scenario trigger.
-               </div>
+          running ? (
+            <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+              <div style={{ fontSize: 9, color: "#4caf50", letterSpacing: 2, textTransform: "uppercase", animation: "pulse 1.5s ease-in-out infinite" }}>
+                ● Agent processing…
+              </div>
+              <div style={{ fontSize: 9, color: "#2a2a3a", textAlign: "center", maxWidth: 220 }}>
+                Waiting for first IntentEnvelope from Bank-A agent.
+                Check Thought Stream for live reasoning.
+              </div>
+              <button
+                onClick={reset}
+                style={{
+                  marginTop: 8, background: "transparent", border: "1px solid #333",
+                  color: "#666", padding: "3px 10px", borderRadius: 3,
+                  fontSize: 9, cursor: "pointer", fontFamily: "inherit",
+                }}
+              >
+                ✕ Abort & Reset
+              </button>
             </div>
-          </div>
+          ) : (
+            <HandshakeTutorial />
+          )
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {traces.map((trace) => (
@@ -236,12 +271,11 @@ export function HandshakeVisualizer({
                   borderLeft: `3px solid ${trace.steps.some((s) => !s.ok) ? "#f44336" : "#4caf50"}`,
                 }}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, alignItems: "flex-start" }}>
-                  <div>
-                    <div style={{ color: "#eee", fontSize: 12, fontWeight: "bold", fontFamily: "monospace" }}>
-                      {trace.tool || "—"} <span style={{ color: "#444", fontWeight: "normal" }}>·</span> <span style={{ color: "#4caf50" }}>${trace.cost.toLocaleString()}</span> <span style={{ color: "#444", fontWeight: "normal" }}>·</span> <span style={{ color: "#444", fontSize: 10 }}>trace:...{trace.traceId.slice(-12)}</span>
-                    </div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ color: "#eee", fontSize: 12, fontWeight: "bold", fontFamily: "monospace" }}>
+                    {trace.tool || "—"} <span style={{ color: "#444", fontWeight: "normal" }}>·</span> <span style={{ color: "#4caf50" }}>${trace.cost.toLocaleString()}</span>
                   </div>
+                  <TraceIdRow traceId={trace.traceId} />
                 </div>
 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -255,31 +289,37 @@ export function HandshakeVisualizer({
                         borderRadius: 4,
                         fontSize: 10,
                         color: step.pending ? "#f0a500" : step.ok ? "#4caf50" : "#f44336",
-                        display: "flex",
-                        alignItems: "center",
                       }}
                     >
                       {step.label}
-                      {step.basescanUrl && (
-                        <a
-                          href={step.basescanUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{
-                            marginLeft: 4,
-                            color: "#f0a500",
-                            textDecoration: "none",
-                            fontSize: 14,
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          title="View on Block Explorer"
-                        >
-                          ↗
-                        </a>
-                      )}
                     </div>
                   ))}
                 </div>
+
+                {trace.basescanUrl && (
+                  <a
+                    href={trace.basescanUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 5,
+                      marginTop: 10,
+                      padding: "5px 10px",
+                      background: "#0d0d00",
+                      border: "1px solid #f0a50055",
+                      borderRadius: 4,
+                      fontSize: 9,
+                      color: "#f0a500",
+                      textDecoration: "none",
+                      fontFamily: "monospace",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    ⛓ sepolia.basescan.org ↗
+                  </a>
+                )}
               </div>
             ))}
           </div>

@@ -41,7 +41,7 @@ def decide():
         if MODEL_ID.startswith("ollama"):
             model = OllamaModel(host=OLLAMA_BASE_URL, model_id=MODEL_ID.replace("ollama/", ""))
         elif MODEL_ID.startswith("anthropic"):
-            model = AnthropicModel(model_id=MODEL_ID)
+            model = AnthropicModel(model_id=MODEL_ID.replace("anthropic/", ""))
         else:
             model = MODEL_ID
 

@@ -36,3 +36,4 @@ docker-compose.override.yml
 *.db
 *.sqlite
 FETCH_HEAD
+.aider*

@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useEnvelopes } from "../hooks/useEnvelopes";
 import type { Envelope, DisputePack } from "../types";
-import { HandshakeTutorial } from "./HandshakeTutorial";
 import { ForensicDetail } from "./ForensicDetail";
 import { EvidenceBundle } from "./EvidenceBundle";
 
@@ -648,9 +647,11 @@ export function DisputeConsole({ resetToken = 0 }: { resetToken?: number }) {
 
       {tab === "envelopes" && (
         <div style={{ flex: 1, overflowY: "auto", padding: "6px 10px" }}>
-          {envelopes.length === 0
-            ? <HandshakeTutorial />
-            : envelopes.map((env) => <EnvelopeRow key={env.id} env={env} />)
+          {envelopes.length === 0 ? (
+            <div style={{ color: "#2a2a3a", fontSize: 10, padding: "12px 2px" }}>
+              No envelopes recorded yet. Run the demo to capture A2A protocol artifacts.
+            </div>
+          ) : envelopes.map((env) => <EnvelopeRow key={env.id} env={env} />)
           }
         </div>
       )}
