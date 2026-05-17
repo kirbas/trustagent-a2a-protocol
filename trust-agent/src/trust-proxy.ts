@@ -158,13 +158,12 @@ export class ProxyAGateway {
       outputData = { error: String(err) };
     }
 
-    // 4. Build ExecutionEnvelope
+    // 4. Build unsigned ExecutionEnvelope — Proxy B is the exclusive signer (D1)
     const executionEnv = await buildExecutionEnvelope({
       intentEnvelope: intentEnv,
       acceptanceReceipt: acceptance,
       status,
       outputData,
-      proxyKey: this.cfg.proxyKey,
     });
 
     // 5. Notify Proxy B of execution result and receive dual-signed receipt
