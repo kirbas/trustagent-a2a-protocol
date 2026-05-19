@@ -26,7 +26,7 @@
  * This file is the CORE LOGIC. The HTTP server wrapper is in proxy-server.ts.
  */
 
-import { verifySignature } from "./crypto.js";
+import { verifySignature, signEnvelope } from "./crypto.js";
 import type { KeyPair } from "./crypto.js";
 import { buildIntentEnvelope, buildAcceptanceReceipt, buildExecutionEnvelope } from "./envelopes.js";
 import type { IntentEnvelope, AcceptanceReceipt, ExecutionEnvelope, ContentProvenanceReceipt } from "./envelopes.js";
@@ -158,12 +158,13 @@ export class ProxyAGateway {
       outputData = { error: String(err) };
     }
 
-    // 4. Build unsigned ExecutionEnvelope — Proxy B is the exclusive signer (D1)
+    // 4. Build ExecutionEnvelope, signed by Proxy A (first leg of D1 dual-sign)
     const executionEnv = await buildExecutionEnvelope({
       intentEnvelope: intentEnv,
       acceptanceReceipt: acceptance,
       status,
       outputData,
+      proxyKey: this.cfg.proxyKey,
     });
 
     // 5. Notify Proxy B of execution result and receive dual-signed receipt
@@ -329,11 +330,34 @@ export class ProxyBGateway {
     return { acceptance };
   }
 
-  async handleExecution(execution: ExecutionEnvelope): Promise<void> {
+  /**
+   * Counter-sign the ExecutionEnvelope (D1 dual-sign, second leg) and
+   * persist it to the DAG ledger.
+   *
+   * Both Proxy A's signature (applied before sending) and Proxy B's
+   * counter-signature cover the same canonical hash — the JCS of the
+   * envelope with the `signatures` field stripped (§4 Hash Target Rule).
+   *
+   * Returns the dual-signed envelope so the HTTP layer can relay it back
+   * to Proxy A, giving both parties an identical binding record.
+   */
+  async handleExecution(execution: ExecutionEnvelope): Promise<ExecutionEnvelope> {
+    // D1: Proxy B counter-signs the envelope
+    const counterSig = await signEnvelope(
+      execution as unknown as Record<string, unknown>,
+      this.cfg.proxyKey,
+      "proxy"
+    );
+
+    const dualSignedExecution: ExecutionEnvelope = {
+      ...execution,
+      signatures: [...execution.signatures, counterSig],
+    };
+
     const intentHash = this.intentEntryHashes.get(execution.trace_id);
     this.cfg.ledger.append(
       "EXECUTION_RECORD",
-      execution,
+      dualSignedExecution,
       intentHash ? [intentHash] : []
     );
 
@@ -348,5 +372,7 @@ export class ProxyBGateway {
     // Clean up stored metadata — transaction lifecycle is complete
     this.intentMeta.delete(execution.trace_id);
     this.intentEntryHashes.delete(execution.trace_id);
+
+    return dualSignedExecution;
   }
 }
