@@ -52,7 +52,7 @@ import { ProxyAGateway, ProxyBGateway } from "@trustagentai/a2a-core";
 
 - **`src/`**: Reference implementation of the A2A Accountability Protocol.
 - **`dist/`**: Pre-built distribution for high-performance sidecar deployment.
-- **`docs/`**: Protocol specification (v0.5) and architectural deep-dives.
+- **`docs/`**: Protocol specification (v0.4 whitepaper) and architectural deep-dives. The v0.5 spec is reflected in the source code (`spec_version: "0.5"` on all envelopes); a formal v0.5 document is in progress.
 
 ---
 
