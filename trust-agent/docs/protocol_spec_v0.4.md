@@ -45,7 +45,7 @@ Streaming DAG Ledger: Instead of linear chains, we use a Directed Acyclic Graph 
 
 4. Architecture: The Trust Proxy Sidecar
 
-The TrustAgentAI solution is delivered as a high-performance Rust-based Sidecar Proxy. It sits directly on the MCP transport path, intercepting JSON-RPC calls in real-time.
+The TrustAgentAI solution is delivered as a Sidecar Proxy that sits directly on the MCP transport path, intercepting JSON-RPC calls in real-time. The current reference implementation is TypeScript (Node.js). A high-performance Rust-based runtime is targeted for production deployments requiring maximum throughput and memory safety.
 
 "No Log, No Action": The proxy enforces a strict write-ahead logging (WAL) policy. An action is only authorized if the intent is successfully persisted to the tamper-evident registry.
 

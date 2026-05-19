@@ -16,13 +16,15 @@ If you've found a bug, please create an issue using the "Bug Report" template. I
 
 🛠️ Development Process
 
-Our core engine is built with Rust. We prioritize maximum performance, memory safety, and predictable latency.
+The current reference implementation is **TypeScript (Node.js ≥ 18)**. A high-performance Rust rewrite is planned for production deployments; see the roadmap section below.
 
 Environment Requirements:
 
-Rust (Stable): We recommend installing via rustup.
+Node.js ≥ 18 (LTS recommended)
 
-Cargo-edit: Useful for managing dependencies efficiently.
+npm ≥ 9
+
+TypeScript 5+ (installed as a devDependency — no global install needed)
 
 Project Setup:
 
@@ -30,17 +32,23 @@ Fork the repository on GitHub.
 
 Clone it locally: git clone https://github.com/kirbas/trustagent-a2a-protocol.git
 
+Install dependencies: npm install
+
 Create a new feature branch: git checkout -b feat/your-feature-name
 
 Coding Standards:
 
 Before submitting your code, ensure it passes our automated quality gates:
 
-Formatting: cargo fmt --all (we use default rustfmt settings).
+Type-checking: npm run build:check (tsc --noEmit — must produce zero errors).
 
-Linting: cargo clippy -- -D warnings (code must be free of warnings).
+Build: npm run build (compiles src/ into dist/).
 
-Testing: cargo test. All new functionality must be covered by unit or integration tests.
+Integration tests: npm run example and npm run proxy:test must complete without errors.
+
+🦀 Roadmap: Rust Production Runtime
+
+The long-term architecture targets a **Rust-based sidecar proxy** for maximum throughput, memory safety, and predictable latency in high-frequency agentic environments. The TypeScript implementation is the canonical protocol reference and will remain the primary contribution target until the Rust port reaches feature parity.
 
 📥 Submitting a Pull Request (PR)
 
