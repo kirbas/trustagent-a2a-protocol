@@ -1,7 +1,7 @@
 /**
  * TrustAgentAI — Envelope Builders
  * Constructs and signs Intent / Acceptance / Execution envelopes
- * per A2A Accountability Protocol v0.4
+ * per A2A Accountability Protocol v0.5
  */
 
 import { v4 as uuidv4 } from "uuid";
