@@ -1,5 +1,22 @@
 # Changelog - ikarin-develop Branch
 
+## [Core Library Audit & D1 Security Fix] - 2026-05-19
+
+### 🔒 Security
+- **D1 Dual-Signing** (`@trustagentai/a2a-core`): `ExecutionEnvelope` is now signed by both Proxy A and Proxy B, closing the gap between the documented D1 non-repudiation invariant and the actual code. Both proxies hold an identical, cryptographically binding record of every execution.
+
+### 🛠️ Build
+- **tsconfig scope fix**: `src/proxy-server.ts` and `src/proxy-test.ts` (entry-point scripts) are now excluded from the TypeScript build. Previously they were compiled into `dist/` and shipped as part of the npm package.
+
+### 📝 Documentation
+- **CONTRIBUTING.md**: Replaced Rust/Cargo dev instructions (wrong language) with the correct Node.js/npm/tsc workflow. Added a dedicated roadmap section noting the Rust production runtime as a future target.
+- **CONTRIBUTING.md**: Fixed git clone URL (was `YOUR_USERNAME` placeholder; now `kirbas`).
+- **protocol_spec_v0.4.md**: Whitepaper clarified — Rust sidecar is an architectural goal, not the current implementation.
+- **README.md**: Corrected `docs/` spec version reference (only v0.4 whitepaper exists).
+- **envelopes.ts**: File header updated from v0.4 to v0.5.
+- **trust-proxy.ts**: ProxyB validation order comment corrected to match code: `TTL → nonce → signature → budget`.
+- **CLAUDE.md**: Added `GET /health` to the proxy-server endpoint table.
+
 ## [Autonomous Agent Integration & Production Hardening] - 2026-05-16
 
 ### 🚀 Real Autonomous Agents
