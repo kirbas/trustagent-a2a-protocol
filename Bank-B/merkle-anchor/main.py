@@ -3,6 +3,7 @@ import sys
 
 from dotenv import find_dotenv, load_dotenv
 from flask import Flask, jsonify
+from flask_cors import CORS
 
 from app.accounting_agent import AccountingAgent
 from infra.db import SQLiteRepository
@@ -11,6 +12,7 @@ from infra.notary import BlockchainNotary
 load_dotenv(find_dotenv())
 
 app = Flask(__name__)
+CORS(app)
 
 def _require_env(key: str) -> str:
     value = os.getenv(key)
@@ -23,6 +25,10 @@ def _require_env(key: str) -> str:
 import threading
 
 _anchor_lock = threading.Lock()
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "healthy"}), 200
 
 @app.route('/anchor', methods=['POST'])
 def trigger_anchor():

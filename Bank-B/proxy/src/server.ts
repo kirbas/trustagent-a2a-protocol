@@ -11,7 +11,20 @@ import {
   type ExecutionEnvelope,
   signEnvelope,
 } from "@trustagentai/a2a-core";
-import { initDb, saveEnvelope, getEnvelopes, clearEnvelopes, getEnvelopesByTraceId, getAnchorByTxHash, getAnchorByTraceId, getAnchorLeaves, getDisputePackByTraceId } from "./db.js";
+import { 
+  initDb, 
+  saveEnvelope, 
+  getEnvelopes, 
+  clearEnvelopes, 
+  getEnvelopesByTraceId, 
+  getAnchorByTxHash, 
+  getAnchorByTraceId, 
+  getAnchorLeaves, 
+  getDisputePackByTraceId,
+  saveThought,
+  getThoughts,
+  getAnchors
+} from "./db.js";
 import { SseBus } from "./sse.js";
 
 const PORT = Number(process.env.PORT ?? 3002);
@@ -19,7 +32,7 @@ const DB_PATH = process.env.DB_PATH ?? "/data/bank-b.db";
 const PROXY_KID = "did:workload:bank-b-proxy#key-1";
 const BANK_A_DID = "did:workload:bank-a-agent";
 const ANCHOR_URL = process.env.ANCHOR_URL ?? "http://bank-b-anchor:5001";
-const BASESCAN_TX_URL = "https://sepolia.basescan.org/tx/";
+const BASESCAN_TX_URL = "https://sepolia.basescan.org/tx/0x";
 
 // ── Merkle helpers ─────────────────────────────────────────────────────────
 
@@ -50,9 +63,13 @@ function initProxyB(proxyBKey: Awaited<ReturnType<typeof generateKeyPair>>, prox
   budgetEngine = new RiskBudgetEngine();
   budgetEngine.registerPolicy({
     did: BANK_A_DID,
-    maxSingleActionUsd: 10_000,
-    dailyBudgetUsd: 10_000,
-    allowedTools: ["get_security_report", "execute_wire_transfer"],
+    maxSingleActionUsd: 1_000_000, // Loosened: Agent decides
+    dailyBudgetUsd: 1_000_000, // Loosened: Agent decides
+    allowedTools: [
+      "get_security_report", "security_posture_report", "get_security_posture_report", "get_document", "execute_wire_transfer",
+      "GetSecurityReport", "SecurityPostureReport", "GetSecurityPostureReport", "GetDocument", "ExecuteWireTransfer",
+      "get-security-report", "security-posture-report", "execute-wire-transfer"
+    ],
   });
   proxyB = new ProxyBGateway({
     proxyKey: proxyBKey,
@@ -112,7 +129,11 @@ async function main(): Promise<void> {
 
   const app = express();
   app.use(express.json());
-  app.use(cors({ origin: process.env.FRONTEND_ORIGIN ?? "http://localhost:3000" }));
+  app.use(cors({ origin: "*" }));
+  app.use((req, _res, next) => {
+    console.log(`[bank-b-proxy] ${req.method} ${req.url}`);
+    next();
+  });
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -133,16 +154,17 @@ async function main(): Promise<void> {
   });
 
   app.post("/thought", (req, res) => {
-    sseBus.broadcast("thought", {
-      source: "bank-b",
-      text: req.body.text,
-      ts: new Date().toISOString(),
-    });
+    const { source = "bank-b", text } = req.body;
+    const ts = new Date().toISOString();
+    saveThought(source, text);
+    sseBus.broadcast("thought", { source, text, ts });
     res.json({ ok: true });
   });
 
   app.get("/events", (_req, res) => sseBus.addClient(res));
   app.get("/envelopes", (_req, res) => res.json(getEnvelopes()));
+  app.get("/thoughts", (_req, res) => res.json(getThoughts()));
+  app.get("/anchors", (_req, res) => res.json(getAnchors()));
 
   app.get("/dispute/:id", (req, res) => {
     // Try in-memory ledger first, fallback to DB
@@ -168,7 +190,28 @@ async function main(): Promise<void> {
     const tool = intent.target?.tool_name;
     const traceId = intent.trace_id;
 
-    const result = await proxyB.handleIntent(intent, estimated_cost_usd);
+    // ── Call Bank-B Decision Agent (Real Agent Loop) ──
+    let manualRejection: { reason: string; errorCode: number } | undefined;
+    try {
+      const agentResp = await fetch("http://bank-b-agent:4002/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent, cost: estimated_cost_usd })
+      });
+      if (agentResp.ok) {
+        const decision = await agentResp.json() as { decision: string, reason: string, errorCode?: string };
+        if (decision.decision === "reject") {
+          manualRejection = {
+            reason: decision.reason,
+            errorCode: decision.errorCode === "ERR_BUDGET_EXCEEDED" ? -32002 : -32001
+          };
+        }
+      }
+    } catch (err) {
+      console.error("[bank-b-proxy] Decision Agent unreachable, falling back to static policy:", err);
+    }
+
+    const result = await proxyB.handleIntent(intent, estimated_cost_usd, manualRejection);
 
     if (result.error || !result.acceptance) {
       saveEnvelope(traceId + ":intent", "INTENT", traceId, intent, JSON.stringify(intent.signatures));

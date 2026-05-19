@@ -1,25 +1,26 @@
-TrustAgentAI Architecture
+# trust-agent-core — Internal Architecture
 
-This document describes the internal design of the TrustAgentAI system, the operational logic of the Trust Proxy, and the mechanisms ensuring cryptographic execution accountability.
+This document describes the internal design of the `@trustagentai/a2a-core` library and its role in the Execution Accountability Layer.
 
-1. System Overview
+---
 
-TrustAgentAI operates as an Execution Accountability Layer. Its primary objective is to transform ephemeral API calls into legally significant and mathematically provable records.
+## 1. System Overview
 
-Key Components:
+The core library transforms ephemeral MCP (Model Context Protocol) interactions into mathematically provable, legally significant records.
 
-Trust Proxy (Sidecar): A high-performance Rust-based proxy server that intercepts traffic between the agent and the tools (MCP).
+### Key Abstractions
+- **`ProxyAGateway`**: Orchestrates the outbound handshake, from Intent formation to Execution delivery.
+- **`ProxyBGateway`**: Handles inbound validation, policy enforcement (Risk Budget), and dual-signing of results.
+- **`DAGLedger`**: A tamper-evident local registry structured as a Directed Acyclic Graph, supporting Merkle batching.
+- **`NonceRegistry`**: Anti-replay mechanism with TTL and clock-skew tolerance.
 
-Policy Engine: A validation module for intents based on Verifiable Credentials (VC) and OPA (Open Policy Agent).
+---
 
-Streaming DAG Ledger: A local log storage system organized as a Directed Acyclic Graph.
+## 2. Transaction Lifecycle (3-Phase Handshake)
 
-Merkle Coordinator: A module for aggregating ledger entries into Merkle Trees for subsequent blockchain anchoring.
+The library enforces a strict protocol sequence to guarantee non-repudiation.
 
-2. Transaction Lifecycle (The Handshake)
-
-The system implements a 4-phase handshake that guarantees non-repudiation at every stage.
-
+```mermaid
 sequenceDiagram
     participant A as Agent A (Initiator)
     participant PA as Trust Proxy A
@@ -27,79 +28,41 @@ sequenceDiagram
     participant B as Agent B / Tool
 
     A->>PA: call_tool(args)
-    PA->>PA: Intent Binding & Signing
-    PA->>PB: Intent Envelope (v0.4)
-    PB->>PB: Policy & VC Check
-    PB->>PA: Acceptance Receipt
-    PB->>B: Execute Tool
-    B->>PB: Return Result
-    PB->>PB: Execution Signing
-    PB->>PA: Execution Envelope
-    PA->>PB: Receipt Ack (Optional)
+    PA->>PA: Intent Binding (JCS + Ed25519)
+    PA->>PB: IntentEnvelope (v0.5)
+    PB->>PB: Nonce & Budget Validation
+    PB->>PA: AcceptanceReceipt (ACCEPTED/REJECTED)
+    PA->>PA: Execute Tool Logic
+    PA->>PB: ExecutionEnvelope
+    PB->>PB: Dual-Signing & Ledger Append
+    PA->>PA: Build ContentProvenanceReceipt
+```
 
+---
 
-3. Data Integrity and Hashing
+## 3. Cryptographic Standards
 
-To ensure deterministic proofs, TrustAgentAI adheres to strict data preparation rules:
+### JCS Canonicalization (RFC 8785)
+All hashing operations utilize the JSON Canonicalization Scheme. This ensures that the same logical payload always produces the same hash, regardless of key order or whitespace in the source JSON.
 
-3.1. Canonicalization (JCS)
+### Ed25519 Signing
+Identity is grounded in Ed25519 key pairs. The `ProxyBGateway` uses a peer key registry to verify inbound packets.
 
-Prior to computing any hash, all JSON objects undergo canonicalization following the RFC 8785 (JCS) standard. This prevents hash mismatches caused by whitespace or key ordering.
+---
 
-3.2. Hash Target Rule
+## 4. Streaming DAG Ledger & Merkle Anchoring
 
-The envelope hash (e.g., intent_hash) is computed from the object excluding the signatures field. This allows for the addition or updating of signatures (e.g., countersigning by the proxy) without changing the identifier of the intent itself.
+### Persistence Model
+Records are stored in a DAG structure where each entry (Intent, Acceptance, Execution) references its causal parent.
 
-4. Streaming DAG Ledger
+### Batching for L2
+The library supports batching ledger entries into Merkle Trees. The resulting Merkle Root is intended for on-chain notarization (e.g., via the `bank-b-anchor` service in the demo), providing an immutable timestamp for the entire batch.
 
-Unlike classical blockchains with linear structures, TrustAgentAI utilizes a DAG (Directed Acyclic Graph) for its local registry.
+---
 
-Why DAG?
+## 5. Security Invariants
 
-Asynchronicity: We can record Acceptance and Execution entries in parallel or with delay, linking them via prev_entry_hashes.
-
-Branching: A single Intent can spawn multiple parallel sub-tasks that reference it as a parent.
-
-Fault Tolerance: Even if tool execution fails due to a timeout, the Intent record is already permanently secured in the graph.
-
-5. Merkle Anchoring & L2 Finality
-
-To ensure local logs are "Dispute-grade" (suitable for arbitration), we utilize a two-tier trust system:
-
-Local Level: Every entry_hash serves as a leaf in the current Merkle window.
-
-Global Level: Every 60 seconds (or every 10,000 transactions), the proxy calculates the Merkle Root and transmits it to an L2 blockchain (Base/Ethereum) via an op_return transaction.
-
-This proves the existence of a specific record at a specific point in time without publicly revealing the contents of all transactions.
-
-6. Security and Anti-Replay
-
-To prevent Replay Attacks in a distributed environment:
-
-Strict TTL: Every envelope contains an expires_at field. The proxy rejects any packets if now > expires_at + skew_tolerance.
-
-Nonce Uniqueness: Proxy B maintains a cache of used Nonces within the TTL window. A duplicate Nonce from the same DID results in an immediate block.
-
-Dual-Signature: High-risk operations SHOULD require a signature from the agent's secure enclave (TEE) plus a signature from the organizational proxy.
-
-7. MCP Integration
-
-TrustAgentAI is designed as a transparent layer for the Model Context Protocol.
-
-The proxy supports stdio and SSE transports.
-
-The interceptor parses the JSON-RPC tools/call method.
-
-In the event of a block, the proxy returns a standard MCP error response containing the cryptographic dispute_id.
-
-8. Threat Model
-
-Threat                Mitigation Mechanism
-
-Agent Hallucination   Blocking via VC (Verifiable Credentials) limits and risk budgets.
-
-Log Tampering         Immutability via hash chains, DAG structure, and Merkle Anchoring.
-
-Key Compromise        Multi-signature support and VC Revocation mechanisms.
-
-API Spoofing          Inclusion of tool_schema_hash and mcp_deployment_id in the Intent Envelope.
+1. **TTL Check**: Envelopes with an `expires_at` in the past are rejected.
+2. **Signature Binding**: The signature covers the JCS hash of the entire envelope payload (excluding the signature field itself).
+3. **Budget Enforcement**: The `RiskBudgetEngine` prevents agents from autonomously overspending their allocated daily or per-transaction limits.
+4. **D1 Non-repudiation**: Execution results are only considered final after being signed by both the initiator's proxy (on behalf of the agent) and the respondent's proxy.

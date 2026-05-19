@@ -1,9 +1,11 @@
 import { useMemo, useState, useEffect } from "react";
-import { useSSEMulti } from "../hooks/useSSEMulti";
+import { useSSE } from "../hooks/useSSE";
 import type { HandshakeEvent, AnchorEvent } from "../types";
+import { HandshakeTutorial } from "./HandshakeTutorial";
+import { getProxyUrl } from "../utils/urls";
 
-const PROXY_A = import.meta.env.VITE_PROXY_A_URL ?? "http://localhost:3001";
-const PROXY_B = import.meta.env.VITE_PROXY_B_URL ?? "http://localhost:3002";
+const PROXY_A = getProxyUrl(3001, import.meta.env.VITE_PROXY_A_URL);
+const PROXY_B = getProxyUrl(3002, import.meta.env.VITE_PROXY_B_URL);
 
 interface TraceStep {
   label: string;
@@ -17,6 +19,8 @@ interface Trace {
   tool: string;
   cost: number;
   steps: TraceStep[];
+  basescanUrl?: string;
+  blockNumber?: number;
 }
 
 function parseAll(raws: string[]): HandshakeEvent[] {
@@ -33,6 +37,36 @@ function parseAnchors(raws: string[]): AnchorEvent[] {
   });
 }
 
+const stripId = (id: string | null | undefined) => id ? id.replace(/^urn:uuid:/, "") : "";
+
+function TraceIdRow({ traceId }: { traceId: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(traceId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4 }}>
+      <span style={{ color: "#2a2a3a", fontSize: 9, fontFamily: "monospace", letterSpacing: 0.2, userSelect: "all" }}>
+        {traceId}
+      </span>
+      <button
+        onClick={copy}
+        title={copied ? "Copied!" : "Copy trace ID"}
+        style={{
+          background: "transparent", border: "none", cursor: "pointer",
+          padding: "0 2px", color: copied ? "#4caf50" : "#333",
+          fontSize: 11, lineHeight: 1, flexShrink: 0,
+        }}
+      >
+        {copied ? "✓" : "⎘"}
+      </button>
+    </div>
+  );
+}
+
 export function HandshakeVisualizer({
   resetToken = 0,
   onReset,
@@ -41,24 +75,16 @@ export function HandshakeVisualizer({
   onReset: () => void;
 }) {
   const [running, setRunning] = useState(false);
+  const { eventsA, eventsB } = useSSE();
 
-  const proxyA = useSSEMulti(`${PROXY_A}/events`, [
-    "demo-triggered", "execution-complete", "envelope",
-  ] as const, resetToken);
-  const proxyB = useSSEMulti(`${PROXY_B}/events`, [
-    "execution-complete", "anchor-pending", "anchor-complete",
-    "anchor-failed", "intent-accepted", "intent-rejected",
-  ] as const, resetToken);
-
-  const demoRaw          = proxyA["demo-triggered"]    ?? [];
-  const execARaw         = proxyA["execution-complete"] ?? [];
-  const envelopeARaw     = proxyA["envelope"]           ?? [];
-  const execBRaw         = proxyB["execution-complete"] ?? [];
-  const anchorPendingRaw = proxyB["anchor-pending"]     ?? [];
-  const anchorCompleteRaw= proxyB["anchor-complete"]    ?? [];
-  const anchorFailedRaw  = proxyB["anchor-failed"]      ?? [];
-  const acceptedRaw      = proxyB["intent-accepted"]    ?? [];
-  const rejectedRaw      = proxyB["intent-rejected"]    ?? [];
+  const demoRaw          = eventsA["demo-triggered"]    ?? [];
+  const execARaw         = eventsA["execution-complete"] ?? [];
+  const envelopeARaw     = eventsA["envelope"]           ?? [];
+  const acceptedRaw      = eventsB["intent-accepted"]    ?? [];
+  const rejectedRaw      = eventsB["intent-rejected"]    ?? [];
+  const anchorPendingRaw = eventsB["anchor-pending"]     ?? [];
+  const anchorCompleteRaw = eventsB["anchor-complete"]    ?? [];
+  const anchorFailedRaw  = eventsB["anchor-failed"]      ?? [];
 
   useEffect(() => {
     if (demoRaw.length > 0) setRunning(true);
@@ -67,7 +93,8 @@ export function HandshakeVisualizer({
   const traces = useMemo<Trace[]>(() => {
     const map = new Map<string, Trace>();
 
-    const addOrGet = (traceId: string, tool?: string, cost?: number): Trace => {
+    const addOrGet = (rawTraceId: string, tool?: string, cost?: number): Trace => {
+      const traceId = stripId(rawTraceId);
       let t = map.get(traceId);
       if (!t) {
         t = { traceId, tool: tool ?? "", cost: cost ?? 0, steps: [] };
@@ -105,17 +132,11 @@ export function HandshakeVisualizer({
       }
     });
 
-    // 3. Process executions (Bilateral)
     parseAll(execARaw).forEach((e) => {
       if (!e.traceId) return;
-      const t = addOrGet(e.traceId, e.tool, e.cost);
-      t.steps.push({ label: "EXECUTED (A) ✓", ok: e.status === "COMPLETED" });
-    });
-
-    parseAll(execBRaw).forEach((e) => {
-      if (!e.traceId) return;
       const t = addOrGet(e.traceId);
-      t.steps.push({ label: "EXECUTED (B) ✓", ok: e.status === "COMPLETED" });
+      const isSuccess = e.status === "SUCCESS" || e.status === "COMPLETED";
+      t.steps.push({ label: `EXECUTED (A) ${isSuccess ? "✓" : "✗"}`, ok: isSuccess });
     });
 
     // 4. Process Anchoring (Bank-B)
@@ -131,11 +152,9 @@ export function HandshakeVisualizer({
       if (!e.traceId) return;
       const t = addOrGet(e.traceId);
       t.steps = t.steps.filter(s => !s.pending && !s.label.startsWith("ANCHOR"));
-      t.steps.push({
-        label: `ANCHORED (B) ⛓ block ${e.blockNumber || ""}`,
-        ok: true,
-        basescanUrl: e.basescanUrl
-      });
+      t.steps.push({ label: `ANCHORED (B) ⛓ block ${e.blockNumber || ""}`, ok: true });
+      if (e.basescanUrl) t.basescanUrl = e.basescanUrl;
+      if (e.blockNumber) t.blockNumber = e.blockNumber;
     });
 
     parseAnchors(anchorFailedRaw).forEach((e: any) => {
@@ -145,8 +164,8 @@ export function HandshakeVisualizer({
       t.steps.push({ label: "ANCHOR FAILED (B) ✗", ok: false });
     });
 
-    return Array.from(map.values());
-  }, [acceptedRaw, rejectedRaw, execARaw, execBRaw, envelopeARaw, anchorPendingRaw, anchorCompleteRaw, anchorFailedRaw]);
+    return Array.from(map.values()).sort((a, b) => a.traceId.localeCompare(b.traceId));
+  }, [acceptedRaw, rejectedRaw, envelopeARaw, execARaw, anchorPendingRaw, anchorCompleteRaw, anchorFailedRaw]);
 
   const demoComplete = traces.length >= 2;
 
@@ -169,147 +188,142 @@ export function HandshakeVisualizer({
       <div
         style={{
           padding: "10px 12px",
-          borderBottom: "1px solid #222",
+          background: "#08080a",
+          borderBottom: "1px solid #1a1a2a",
           display: "flex",
+          justifyContent: "space-between",
           alignItems: "center",
-          gap: 12,
-          minHeight: 84,
-          boxSizing: "border-box",
         }}
       >
-        <span
-          style={{
-            color: "#7bb3ff",
-            fontWeight: "bold",
-            fontSize: 12,
-            letterSpacing: 1,
-            textTransform: "uppercase",
-          }}
-        >
-          Bilateral Handshake
-        </span>
-        {!running && (
-          <button
-            onClick={trigger}
-            style={{
-              padding: "4px 14px",
-              background: "#1a4a1a",
-              border: "1px solid #4caf50",
-              borderRadius: 4,
-              color: "#4caf50",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              fontSize: 12,
-            }}
-          >
-            ▶ Start Demo
-          </button>
-        )}
-        {running && demoComplete && (
-          <button
-            onClick={reset}
-            style={{
-              padding: "4px 14px",
-              background: "#1a1a3a",
-              border: "1px solid #7bb3ff",
-              borderRadius: 4,
-              color: "#7bb3ff",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              fontSize: 12,
-            }}
-          >
-            ↺ Clear messages and restart demo
-          </button>
-        )}
-        {running && !demoComplete && traces.length === 0 && (
-          <span style={{ color: "#555", fontSize: 11 }}>Waiting for agent…</span>
-        )}
-      </div>
-
-      <div style={{ flex: 1, overflowY: "auto", padding: "8px 10px" }}>
-        {traces.map((trace) => {
-          const isSuccess = trace.steps.some((s) => s.label.startsWith("EXECUTED"));
-          const isDenied = trace.steps.some((s) => s.label.startsWith("REJECTED"));
-          const isAnchored = trace.steps.some((s) => s.basescanUrl);
-          const borderColor = isAnchored
-            ? "#f0a500"
-            : isSuccess
-            ? "#4caf50"
-            : isDenied
-            ? "#f44336"
-            : "#888";
-          return (
-            <div
-              key={trace.traceId}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, fontWeight: "bold", letterSpacing: 1, color: "#aaa" }}>
+            BILATERAL HANDSHAKE
+          </span>
+          {!running && traces.length === 0 && (
+            <button 
+              onClick={trigger}
               style={{
-                marginBottom: 12,
-                background: "#111",
-                borderRadius: 6,
-                padding: "10px 12px",
-                borderLeft: `3px solid ${borderColor}`,
+                background: "#4caf50", border: "none", color: "#000",
+                fontSize: 9, fontWeight: "bold", padding: "2px 6px",
+                borderRadius: 2, cursor: "pointer"
               }}
             >
-              <div style={{ fontSize: 10, color: "#666", marginBottom: 8 }}>
-                <span style={{ color: "#aaa" }}>{trace.tool || "—"}</span>
-                {" · "}
-                <span style={{ color: trace.cost > 10000 ? "#f44336" : "#4caf50" }}>
-                  ${(trace.cost ?? 0).toLocaleString()}
-                </span>
-                {" · "}
-                trace:…{(trace.traceId || "").slice(-12)}
+              🚀 START DEMO
+            </button>
+          )}
+          <div style={{ display: "flex", gap: 4 }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: running ? "#4caf50" : "#333" }} />
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: demoComplete ? "#4caf50" : "#333" }} />
+          </div>
+        </div>
+        <button
+          onClick={reset}
+          style={{
+            background: "#1a1a2a",
+            border: "1px solid #333",
+            color: "#7bb3ff",
+            padding: "4px 8px",
+            borderRadius: 4,
+            fontSize: 10,
+            cursor: "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          ↺ Clear messages and restart demo
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "12px", position: "relative" }}>
+        {traces.length === 0 ? (
+          running ? (
+            <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+              <div style={{ fontSize: 9, color: "#4caf50", letterSpacing: 2, textTransform: "uppercase", animation: "pulse 1.5s ease-in-out infinite" }}>
+                ● Agent processing…
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                {trace.steps.map((step, i) =>
-                  step.basescanUrl ? (
-                    <a
-                      key={i}
-                      href={step.basescanUrl}
-                      target="_blank"
-                      rel="noreferrer"
+              <div style={{ fontSize: 9, color: "#2a2a3a", textAlign: "center", maxWidth: 220 }}>
+                Waiting for first IntentEnvelope from Bank-A agent.
+                Check Thought Stream for live reasoning.
+              </div>
+              <button
+                onClick={reset}
+                style={{
+                  marginTop: 8, background: "transparent", border: "1px solid #333",
+                  color: "#666", padding: "3px 10px", borderRadius: 3,
+                  fontSize: 9, cursor: "pointer", fontFamily: "inherit",
+                }}
+              >
+                ✕ Abort & Reset
+              </button>
+            </div>
+          ) : (
+            <HandshakeTutorial />
+          )
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {traces.map((trace) => (
+              <div
+                key={trace.traceId}
+                style={{
+                  background: "#0d0d0f",
+                  border: "1px solid #222",
+                  borderRadius: 6,
+                  padding: "12px",
+                  borderLeft: `3px solid ${trace.steps.some((s) => !s.ok) ? "#f44336" : "#4caf50"}`,
+                }}
+              >
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ color: "#eee", fontSize: 12, fontWeight: "bold", fontFamily: "monospace" }}>
+                    {trace.tool || "—"} <span style={{ color: "#444", fontWeight: "normal" }}>·</span> <span style={{ color: "#4caf50" }}>${trace.cost.toLocaleString()}</span>
+                  </div>
+                  <TraceIdRow traceId={trace.traceId} />
+                </div>
+
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {trace.steps.map((step, idx) => (
+                    <div
+                      key={idx}
                       style={{
-                        padding: "2px 8px",
-                        borderRadius: 3,
+                        padding: "4px 8px",
+                        background: step.pending ? "#1a1a00" : step.ok ? "#0a1a0a" : "#1a0a0a",
+                        border: `1px solid ${step.pending ? "#a5a500" : step.ok ? "#2d5a2d" : "#5a2d2d"}`,
+                        borderRadius: 4,
                         fontSize: 10,
-                        background: "#2b1f00",
-                        color: "#f0a500",
-                        border: "1px solid #f0a500",
-                        textDecoration: "none",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {step.label} ↗
-                    </a>
-                  ) : (
-                    <span
-                      key={i}
-                      style={{
-                        padding: "2px 8px",
-                        borderRadius: 3,
-                        fontSize: 10,
-                        background: step.pending
-                          ? "#1a1a00"
-                          : step.ok
-                          ? "#0d2b0d"
-                          : "#2b0d0d",
-                        color: step.pending
-                          ? "#999900"
-                          : step.ok
-                          ? "#4caf50"
-                          : "#f44336",
-                        border: `1px solid ${
-                          step.pending ? "#666600" : step.ok ? "#4caf50" : "#f44336"
-                        }`,
+                        color: step.pending ? "#f0a500" : step.ok ? "#4caf50" : "#f44336",
                       }}
                     >
                       {step.label}
-                    </span>
-                  )
+                    </div>
+                  ))}
+                </div>
+
+                {trace.basescanUrl && (
+                  <a
+                    href={trace.basescanUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 5,
+                      marginTop: 10,
+                      padding: "5px 10px",
+                      background: "#0d0d00",
+                      border: "1px solid #f0a50055",
+                      borderRadius: 4,
+                      fontSize: 9,
+                      color: "#f0a500",
+                      textDecoration: "none",
+                      fontFamily: "monospace",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    ⛓ sepolia.basescan.org ↗
+                  </a>
                 )}
               </div>
-            </div>
-          );
-        })}
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

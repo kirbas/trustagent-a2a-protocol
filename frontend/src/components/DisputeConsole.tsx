@@ -1,12 +1,13 @@
 import { useState, useMemo, useEffect } from "react";
 import { useEnvelopes } from "../hooks/useEnvelopes";
 import type { Envelope, DisputePack } from "../types";
-import { HandshakeTutorial } from "./HandshakeTutorial";
 import { ForensicDetail } from "./ForensicDetail";
 import { EvidenceBundle } from "./EvidenceBundle";
 
-const PROXY_A = import.meta.env.VITE_PROXY_A_URL ?? "http://localhost:3001";
-const PROXY_B = import.meta.env.VITE_PROXY_B_URL ?? "http://localhost:3002";
+import { getProxyUrl } from "../utils/urls";
+
+const PROXY_B = getProxyUrl(3002, import.meta.env.VITE_PROXY_B_URL);
+const PROXY_A = getProxyUrl(3001, import.meta.env.VITE_PROXY_A_URL);
 
 const TYPE_COLOR: Record<string, string> = {
   INTENT: "#7bb3ff",
@@ -308,8 +309,14 @@ function AnchorVerifyView() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const verify = async () => {
-    const txHash = input.trim();
+  const [anchors, setAnchors] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch(`${PROXY_B}/anchors`).then(r => r.json()).then(setAnchors).catch(console.error);
+  }, []);
+
+  const verify = async (overrideHash?: string) => {
+    const txHash = overrideHash || input.trim();
     if (!txHash) return;
     setLoading(true);
     setResult(null);
@@ -319,6 +326,7 @@ function AnchorVerifyView() {
       const r = await fetch(`${PROXY_B}/verify/${encodeURIComponent(txHash)}`);
       if (r.status === 404) { setNotFound(true); return; }
       setResult(await r.json());
+      if (!overrideHash) setInput(txHash);
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : String(err));
     } finally { setLoading(false); }
@@ -387,7 +395,7 @@ function AnchorVerifyView() {
             outline: "none", transition: "border-color 0.2s",
           }}
         />
-        <button onClick={verify} disabled={!input.trim() || loading}
+        <button onClick={() => verify()} disabled={!input.trim() || loading}
           style={{
             padding: "4px 12px", background: "#1a2a3a", border: "1px solid #7bb3ff",
             borderRadius: 3, color: "#7bb3ff", cursor: "pointer", fontFamily: "inherit", fontSize: 11,
@@ -398,7 +406,7 @@ function AnchorVerifyView() {
         {result && (
           <button onClick={download}
             style={{
-              padding: "4px 10px", background: "#1a2a1a", border: "1px solid #4caf50",
+              padding: "4px 10px", background: "#1a1a1a", border: "1px solid #4caf50",
               borderRadius: 3, color: "#4caf50", cursor: "pointer", fontFamily: "inherit", fontSize: 11,
               whiteSpace: "nowrap",
             }}
@@ -407,6 +415,28 @@ function AnchorVerifyView() {
           </button>
         )}
       </div>
+
+      {/* Anchor List */}
+      {!result && !loading && anchors.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ color: "#444", fontSize: 9, textTransform: "uppercase", letterSpacing: 1 }}>Latest Anchors</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {anchors.slice().reverse().map((a) => (
+              <button
+                key={a.batch_id}
+                onClick={() => verify(a.tx_hash)}
+                style={{
+                  padding: "3px 8px", background: "#0d0d0d", border: "1px solid #222",
+                  borderRadius: 3, color: "#7bb3ff", fontSize: 10, cursor: "pointer",
+                  fontFamily: "monospace"
+                }}
+              >
+                0x{a.tx_hash.slice(0, 12)}…
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {fetchError && (
         <div style={{
@@ -617,9 +647,11 @@ export function DisputeConsole({ resetToken = 0 }: { resetToken?: number }) {
 
       {tab === "envelopes" && (
         <div style={{ flex: 1, overflowY: "auto", padding: "6px 10px" }}>
-          {envelopes.length === 0
-            ? <HandshakeTutorial />
-            : envelopes.map((env) => <EnvelopeRow key={env.id} env={env} />)
+          {envelopes.length === 0 ? (
+            <div style={{ color: "#2a2a3a", fontSize: 10, padding: "12px 2px" }}>
+              No envelopes recorded yet. Run the demo to capture A2A protocol artifacts.
+            </div>
+          ) : envelopes.map((env) => <EnvelopeRow key={env.id} env={env} />)
           }
         </div>
       )}
