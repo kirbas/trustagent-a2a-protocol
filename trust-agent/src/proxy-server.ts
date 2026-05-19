@@ -112,9 +112,11 @@ async function bootstrap() {
     if (method === "POST" && url === "/executed") {
       try {
         const { execution } = body as { execution: ExecutionEnvelope };
-        await proxyB.handleExecution(execution);
+        // D1: handleExecution counter-signs and returns the dual-signed envelope.
+        // Relay it back so Proxy A holds the same binding record as Proxy B.
+        const dualSigned = await proxyB.handleExecution(execution);
         res.writeHead(200);
-        res.end(JSON.stringify({ ok: true }));
+        res.end(JSON.stringify({ execution: dualSigned }));
       } catch (e) {
         res.writeHead(500);
         res.end(JSON.stringify({ error: String(e) }));
