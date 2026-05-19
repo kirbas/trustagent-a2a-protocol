@@ -23,6 +23,8 @@
     "node_modules",
     "dist",
     "example.ts",
-    "proxy-test.ts"
+    "proxy-test.ts",
+    "src/proxy-server.ts",
+    "src/proxy-test.ts"
   ]
 }

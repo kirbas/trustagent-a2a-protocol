@@ -27,6 +27,7 @@ build/
 .vscode/
 *.swp
 *.swo
+.claude/
 
 # Docker
 .docker
@@ -36,3 +37,4 @@ docker-compose.override.yml
 *.db
 *.sqlite
 FETCH_HEAD
+.aider*

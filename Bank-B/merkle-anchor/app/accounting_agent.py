@@ -70,7 +70,8 @@ class AccountingAgent:
             f"Anchor confirmed at block {result['block_number']}. All {len(envelopes)} envelopes cryptographically bound to L2. Local proof re-verified: all_valid={all_valid}."
         )
 
-        vc_link = BASESCAN_TX_URL.format(tx_hash=result["tx_hash"])
+        tx_hash_bare = result["tx_hash"].lstrip("0x")
+        vc_link = BASESCAN_TX_URL.format(tx_hash=tx_hash_bare)
         self._log(f"VC Pitch Link → {vc_link}")
 
         return {
