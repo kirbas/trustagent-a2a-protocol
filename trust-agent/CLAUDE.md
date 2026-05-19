@@ -45,7 +45,7 @@ All envelope hashes are computed over the object **with the `signatures` field r
 | [src/nonce-registry.ts](src/nonce-registry.ts) | Anti-replay: `(did, nonce)` uniqueness with TTL + 5 s skew tolerance |
 | [src/risk-budget.ts](src/risk-budget.ts) | `RiskBudgetEngine`: per-agent tool whitelist, single-action cap, rolling 24 h budget |
 | [src/trust-proxy.ts](src/trust-proxy.ts) | `ProxyAGateway` (sends IntentEnvelope, awaits AcceptanceReceipt, fires ExecutionEnvelope); `ProxyBGateway` (validates TTL → nonce → signature → budget → records to DAG) |
-| [src/proxy-server.ts](src/proxy-server.ts) | Node `http` server wrapping `ProxyBGateway`: `POST /accept`, `POST /executed`, `POST /flush`, `GET /history/:id`, `GET /dispute/:id` |
+| [src/proxy-server.ts](src/proxy-server.ts) | Node `http` server wrapping `ProxyBGateway`: `POST /accept`, `POST /executed`, `POST /flush`, `GET /history/:id`, `GET /dispute/:id`, `GET /health` |
 
 ### DAG Ledger & Merkle Batching
 
