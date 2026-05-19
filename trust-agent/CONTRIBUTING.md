@@ -28,7 +28,7 @@ Project Setup:
 
 Fork the repository on GitHub.
 
-Clone it locally: git clone https://github.com/YOUR_USERNAME/trustagent-a2a-protocol.git
+Clone it locally: git clone https://github.com/kirbas/trustagent-a2a-protocol.git
 
 Create a new feature branch: git checkout -b feat/your-feature-name
 
