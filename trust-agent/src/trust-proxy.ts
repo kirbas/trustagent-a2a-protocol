@@ -13,12 +13,12 @@
  *
  *   OUTBOUND (Proxy B side — the executing agent/MCP server):
  *     1. Receive IntentEnvelope from Proxy A
- *     2. Check nonce (anti-replay)
- *     3. Check TTL (expiry)
+ *     2. Check TTL (expiry)         — stateless, no side-effects; fast-fail first
+ *     3. Check nonce (anti-replay)  — stateful write; only consume after TTL passes
  *     4. Verify Proxy A signature
  *     5. Check risk budget (D4)
  *     6. Sign & return AcceptanceReceipt
- *     7. After execution: sign & return ExecutionEnvelope
+ *     7. After execution: counter-sign ExecutionEnvelope (D1) & return it
  *
  * Transport: The proxy communicates over HTTP/JSON (easily adaptable to
  * WebSockets or stdio for native MCP transport).
