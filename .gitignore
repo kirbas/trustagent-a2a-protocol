@@ -27,6 +27,7 @@ build/
 .vscode/
 *.swp
 *.swo
+.claude/
 
 # Docker
 .docker
