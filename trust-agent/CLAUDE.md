@@ -8,12 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install           # install dependencies
 npm run build         # compile TypeScript → dist/
 npm run build:check   # type-check without emitting
+npm test              # run Vitest unit tests (src/**/*.test.ts)
+npm run test:coverage # run Vitest with coverage (80% threshold)
 npm run example       # run full A2A lifecycle demo (example.ts)
 npm run proxy:test    # run 4-scenario integration test (proxy-test.ts)
 npm run proxy:server  # start Proxy B HTTP server on PORT (default 3001)
 ```
 
-There is no test framework. `example.ts` and `proxy-test.ts` are the integration tests; run them with `tsx` via the npm scripts above. `tsconfig.json` excludes these files from the build — only `src/**/*` is compiled into `dist/`.
+Unit tests use Vitest (`vitest.config.ts`), colocated as `src/*.test.ts`. `example.ts` and `proxy-test.ts` remain separate integration tests, run with `tsx` via the npm scripts above. `tsconfig.json` excludes these files (and `*.test.ts`) from the build — only `src/**/*` is compiled into `dist/`.
 
 The package is ESM (`"type": "module"`), targets ES2022, and uses `NodeNext` module resolution. All internal imports must use `.js` extensions (TypeScript's NodeNext requirement).
 
