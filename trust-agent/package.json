@@ -45,6 +45,8 @@
   "scripts": {
     "build": "tsc",
     "build:check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build",
     "example": "node --loader ts-node/esm example.ts",
     "proxy:test": "node --loader ts-node/esm proxy-test.ts",
@@ -83,7 +85,9 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/uuid": "^10.0.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "ts-node": "^10.9.2",
     "typescript": "^5.0.0",
-    "ts-node": "^10.9.2"
+    "vitest": "^4.1.9"
   }
 }

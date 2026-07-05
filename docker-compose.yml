@@ -25,6 +25,8 @@ services:
       PORT: "3002"
       DB_PATH: "/data/bank-b.db"
       ANCHOR_URL: "http://bank-b-anchor:5001"
+      KEYSTORE_PATH: "/data/bank-b-keystore.json"
+      KEYSTORE_KEK: "${BANK_B_KEYSTORE_KEK}"
     volumes:
       - bank-b-data:/data
     healthcheck:
@@ -45,6 +47,8 @@ services:
       PORT: "3001"
       PROXY_B_URL: "http://bank-b-proxy:3002"
       DB_PATH: "/data/bank-a.db"
+      KEYSTORE_PATH: "/data/bank-a-keystore.json"
+      KEYSTORE_KEK: "${BANK_A_KEYSTORE_KEK}"
     volumes:
       - bank-a-data:/data
     depends_on:

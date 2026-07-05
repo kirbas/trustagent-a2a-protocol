@@ -2,13 +2,14 @@ import express from "express";
 import cors from "cors";
 import { createHash } from "crypto";
 import {
-  generateKeyPair,
+  loadOrCreateKeyPair,
   ProxyBGateway,
   DAGLedger,
   NonceRegistry,
   RiskBudgetEngine,
   type IntentEnvelope,
   type ExecutionEnvelope,
+  type KeyPair,
   signEnvelope,
 } from "@trustagentai/a2a-core";
 import { 
@@ -29,6 +30,8 @@ import { SseBus } from "./sse.js";
 
 const PORT = Number(process.env.PORT ?? 3002);
 const DB_PATH = process.env.DB_PATH ?? "/data/bank-b.db";
+const KEYSTORE_PATH = process.env.KEYSTORE_PATH ?? "/data/bank-b-keystore.json";
+const KEYSTORE_KEK = process.env.KEYSTORE_KEK;
 const PROXY_KID = "did:workload:bank-b-proxy#key-1";
 const BANK_A_DID = "did:workload:bank-a-agent";
 const ANCHOR_URL = process.env.ANCHOR_URL ?? "http://bank-b-anchor:5001";
@@ -57,7 +60,7 @@ let nonceRegistry: NonceRegistry;
 let budgetEngine: RiskBudgetEngine;
 let proxyB: ProxyBGateway;
 
-function initProxyB(proxyBKey: Awaited<ReturnType<typeof generateKeyPair>>, proxyAPublicKeys: Map<string, Uint8Array>) {
+function initProxyB(proxyBKey: KeyPair, proxyAPublicKeys: Map<string, Uint8Array>) {
   ledger = new DAGLedger();
   nonceRegistry = new NonceRegistry();
   budgetEngine = new RiskBudgetEngine();
@@ -81,7 +84,10 @@ function initProxyB(proxyBKey: Awaited<ReturnType<typeof generateKeyPair>>, prox
 }
 
 async function main(): Promise<void> {
-  const proxyKey = await generateKeyPair(PROXY_KID);
+  if (!KEYSTORE_KEK) {
+    throw new Error("KEYSTORE_KEK env var is required to load/create the proxy identity keystore");
+  }
+  const proxyKey = await loadOrCreateKeyPair(PROXY_KID, KEYSTORE_PATH, KEYSTORE_KEK);
   initDb(DB_PATH);
   const sseBus = new SseBus();
 
