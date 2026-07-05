@@ -10,7 +10,8 @@
 import * as ed from "@noble/ed25519";
 import _canonicalize = require("canonicalize");
 const canonicalize = (_canonicalize.default ?? _canonicalize) as (input: unknown) => string | undefined;
-import { createHash, randomBytes } from "crypto";
+import { createHash, randomBytes, createCipheriv, createDecipheriv } from "crypto";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,69 @@ export interface SignatureBlock {
 export async function generateKeyPair(kid: string): Promise<KeyPair> {
   const privateKey = ed.utils.randomPrivateKey();
   const publicKey = await ed.getPublicKeyAsync(privateKey);
+  return { privateKey, publicKey, kid };
+}
+
+// ─── Durable, Custodied Keystore ───────────────────────────────────────────────
+
+interface KeystoreFile {
+  kid: string;
+  publicKey: string;   // hex
+  iv: string;           // hex, 12 bytes
+  ciphertext: string;   // hex, encrypted 32-byte private key
+  tag: string;           // hex, GCM auth tag
+}
+
+function parseKek(kek: string): Buffer {
+  if (!/^[0-9a-fA-F]{64}$/.test(kek)) {
+    throw new Error("KEYSTORE_KEK must be 64 hex characters (32 bytes)");
+  }
+  return Buffer.from(kek, "hex");
+}
+
+/**
+ * Load an Ed25519 identity from an encrypted keystore file, creating it on
+ * first use. The private key is encrypted at rest with AES-256-GCM under a
+ * KEK supplied by the caller (never derived from anything stored alongside
+ * the keystore, e.g. the database) — a wrong/missing KEK fails loudly rather
+ * than silently minting a new identity.
+ */
+export async function loadOrCreateKeyPair(
+  kid: string,
+  keystorePath: string,
+  kek: string
+): Promise<KeyPair> {
+  const kekBuffer = parseKek(kek);
+
+  if (existsSync(keystorePath)) {
+    const file: KeystoreFile = JSON.parse(readFileSync(keystorePath, "utf8"));
+    const iv = Buffer.from(file.iv, "hex");
+    const tag = Buffer.from(file.tag, "hex");
+    const decipher = createDecipheriv("aes-256-gcm", kekBuffer, iv);
+    decipher.setAuthTag(tag);
+    const privateKey = Buffer.concat([
+      decipher.update(Buffer.from(file.ciphertext, "hex")),
+      decipher.final(),
+    ]);
+    const publicKey = await ed.getPublicKeyAsync(privateKey);
+    return { privateKey: new Uint8Array(privateKey), publicKey, kid: file.kid };
+  }
+
+  const { privateKey, publicKey } = await generateKeyPair(kid);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", kekBuffer, iv);
+  const ciphertext = Buffer.concat([cipher.update(privateKey), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  const file: KeystoreFile = {
+    kid,
+    publicKey: Buffer.from(publicKey).toString("hex"),
+    iv: iv.toString("hex"),
+    ciphertext: ciphertext.toString("hex"),
+    tag: tag.toString("hex"),
+  };
+  writeFileSync(keystorePath, JSON.stringify(file));
+
   return { privateKey, publicKey, kid };
 }
 

@@ -25,6 +25,7 @@
     "example.ts",
     "proxy-test.ts",
     "src/proxy-server.ts",
-    "src/proxy-test.ts"
+    "src/proxy-test.ts",
+    "src/**/*.test.ts"
   ]
 }

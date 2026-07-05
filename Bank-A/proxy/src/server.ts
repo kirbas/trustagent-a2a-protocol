@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import { createHash, randomUUID } from "crypto";
 import {
-  generateKeyPair,
+  loadOrCreateKeyPair,
   ProxyAGateway,
   buildContentProvenanceReceipt,
   sha256Json,
@@ -25,13 +25,18 @@ import { registerWithProxyB } from "./key-exchange.js";
 const PORT = Number(process.env.PORT ?? 3001);
 const PROXY_B_URL = process.env.PROXY_B_URL ?? "http://bank-b-proxy:3002";
 const DB_PATH = process.env.DB_PATH ?? "/data/bank-a.db";
+const KEYSTORE_PATH = process.env.KEYSTORE_PATH ?? "/data/bank-a-keystore.json";
+const KEYSTORE_KEK = process.env.KEYSTORE_KEK;
 const INITIATOR_DID = "did:workload:bank-a-agent";
 const PROXY_KID = "did:workload:bank-a-proxy#key-1";
 
 let triggered = false;
 
 async function main(): Promise<void> {
-  const proxyKey = await generateKeyPair(PROXY_KID);
+  if (!KEYSTORE_KEK) {
+    throw new Error("KEYSTORE_KEK env var is required to load/create the proxy identity keystore");
+  }
+  const proxyKey = await loadOrCreateKeyPair(PROXY_KID, KEYSTORE_PATH, KEYSTORE_KEK);
 
   try {
     const BANK_A_DID = "did:workload:bank-a-proxy";
