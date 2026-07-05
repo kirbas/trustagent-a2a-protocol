@@ -24,7 +24,8 @@ import {
   getDisputePackByTraceId,
   saveThought,
   getThoughts,
-  getAnchors
+  getAnchors,
+  verifyEnvelopeChain
 } from "./db.js";
 import { SseBus } from "./sse.js";
 
@@ -171,6 +172,7 @@ async function main(): Promise<void> {
   app.get("/envelopes", (_req, res) => res.json(getEnvelopes()));
   app.get("/thoughts", (_req, res) => res.json(getThoughts()));
   app.get("/anchors", (_req, res) => res.json(getAnchors()));
+  app.get("/verify-chain", (_req, res) => res.json(verifyEnvelopeChain()));
 
   app.get("/dispute/:id", (req, res) => {
     // Try in-memory ledger first, fallback to DB

@@ -18,6 +18,7 @@ import {
   getEnvelopesByTraceId,
   saveThought,
   getThoughts,
+  verifyEnvelopeChain,
 } from "./db.js";
 import { SseBus } from "./sse.js";
 import { registerWithProxyB } from "./key-exchange.js";
@@ -103,6 +104,7 @@ async function main(): Promise<void> {
 
   app.get("/envelopes", (_req, res) => res.json(getEnvelopes()));
   app.get("/thoughts", (_req, res) => res.json(getThoughts()));
+  app.get("/verify-chain", (_req, res) => res.json(verifyEnvelopeChain()));
 
   app.post("/cross-check", async (req, res) => {
     const { traceId } = req.body as { traceId: string };
