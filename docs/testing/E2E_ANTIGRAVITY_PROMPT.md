@@ -153,6 +153,22 @@ docker compose exec bank-b-proxy sh -c "apk add --no-cache sqlite 2>/dev/null; s
 curl -s "http://localhost:3002/verify-trace/<TRACE_ID>" | python3 -m json.tool
 ```
 
+## Part 3b — Hash-chain continuity (Delta #2)
+
+Each proxy links its envelope rows into an append-only hash-chain (`seq` + `prev_hash`). Verify it holds, then prove tampering/deletion is detectable.
+
+1. Both chains verify clean after the transaction:
+   ```bash
+   curl -s http://localhost:3001/verify-chain | python3 -m json.tool   # expect {"valid": true}
+   curl -s http://localhost:3002/verify-chain | python3 -m json.tool   # expect {"valid": true}
+   ```
+2. Inspect the new columns directly (should be a gapless 0,1,2,… sequence with non-null `prev_hash`):
+   ```bash
+   docker compose exec bank-b-proxy sh -c "sqlite3 /data/bank-b.db 'SELECT seq, substr(prev_hash,1,12), type FROM envelopes ORDER BY seq;'" 2>/dev/null \
+     || (docker cp bank-b-proxy:/data/bank-b.db ./bank-b.db.tmp && sqlite3 ./bank-b.db.tmp "SELECT seq, substr(prev_hash,1,12), type FROM envelopes ORDER BY seq;")
+   ```
+3. **Tamper-detection (do this on the copied `./bank-b.db.tmp`, NOT the live container DB — do not corrupt the running stack):** edit one row's `raw_payload` in the copy, then run the same verify logic against it, or reason from `/verify-chain` semantics. Expected: mutating any row's content breaks its successor's `prev_hash` link; deleting a row opens a `seq` gap — either makes `verifyChain` return `{"valid": false, "error": ...}`. Report whether the break is detected. (You can confirm this deterministically via the unit tests instead: `cd trust-agent && npm test -- hash-chain` — the tamper and gap cases are covered there.)
+
 ## Part 4 — Force the on-chain anchor and verify it for real
 
 1. Trigger an immediate anchor of whatever's pending (don't wait for the auto-batch threshold):
