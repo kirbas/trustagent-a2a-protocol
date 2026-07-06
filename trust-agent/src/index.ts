@@ -3,6 +3,7 @@
 
 export * from "./crypto.js";
 export * from "./hash-chain.js";
+export * from "./co-sign.js";
 export * from "./envelopes.js";
 export * from "./ledger.js";
 export * from "./nonce-registry.js";
