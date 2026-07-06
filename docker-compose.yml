@@ -1,4 +1,25 @@
 services:
+  trust-agent-cloud:
+    build:
+      context: .
+      dockerfile: trust-agent-cloud/Dockerfile
+    container_name: trust-agent-cloud
+    ports:
+      - "3003:3003"
+    environment:
+      PORT: "3003"
+      DB_PATH: "/data/trust-agent-cloud.db"
+      KEYSTORE_PATH: "/data/trust-agent-cloud-keystore.json"
+      KEYSTORE_KEK: "${TRUSTAGENT_KEYSTORE_KEK}"
+    volumes:
+      - trust-agent-cloud-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3003/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+
   bank-b-anchor:
     build:
       context: Bank-B/merkle-anchor
@@ -25,10 +46,14 @@ services:
       PORT: "3002"
       DB_PATH: "/data/bank-b.db"
       ANCHOR_URL: "http://bank-b-anchor:5001"
+      TRUSTAGENT_URL: "http://trust-agent-cloud:3003"
       KEYSTORE_PATH: "/data/bank-b-keystore.json"
       KEYSTORE_KEK: "${BANK_B_KEYSTORE_KEK}"
     volumes:
       - bank-b-data:/data
+    depends_on:
+      trust-agent-cloud:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3002/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
       interval: 5s
@@ -46,6 +71,7 @@ services:
     environment:
       PORT: "3001"
       PROXY_B_URL: "http://bank-b-proxy:3002"
+      TRUSTAGENT_URL: "http://trust-agent-cloud:3003"
       DB_PATH: "/data/bank-a.db"
       KEYSTORE_PATH: "/data/bank-a-keystore.json"
       KEYSTORE_KEK: "${BANK_A_KEYSTORE_KEK}"
@@ -53,6 +79,8 @@ services:
       - bank-a-data:/data
     depends_on:
       bank-b-proxy:
+        condition: service_healthy
+      trust-agent-cloud:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
@@ -118,3 +146,4 @@ services:
 volumes:
   bank-a-data:
   bank-b-data:
+  trust-agent-cloud-data:

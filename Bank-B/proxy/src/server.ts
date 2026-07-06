@@ -28,9 +28,11 @@ import {
   verifyEnvelopeChain
 } from "./db.js";
 import { SseBus } from "./sse.js";
+import { registerWithWitness } from "./key-exchange.js";
 
 const PORT = Number(process.env.PORT ?? 3002);
 const DB_PATH = process.env.DB_PATH ?? "/data/bank-b.db";
+const TRUSTAGENT_URL = process.env.TRUSTAGENT_URL;
 const KEYSTORE_PATH = process.env.KEYSTORE_PATH ?? "/data/bank-b-keystore.json";
 const KEYSTORE_KEK = process.env.KEYSTORE_KEK;
 const PROXY_KID = "did:workload:bank-b-proxy#key-1";
@@ -94,6 +96,15 @@ async function main(): Promise<void> {
 
   const proxyAPublicKeys = new Map<string, Uint8Array>();
   initProxyB(proxyKey, proxyAPublicKeys);
+
+  // Delta #3: register our key with the independent witness so it can verify
+  // our Acceptance signature before co-signing. Best-effort in the background.
+  if (TRUSTAGENT_URL) {
+    const pubHex = Buffer.from(proxyKey.publicKey).toString("hex");
+    registerWithWitness(TRUSTAGENT_URL, PROXY_KID, pubHex).catch((e) =>
+      console.warn("[key-exchange] witness registration failed", e)
+    );
+  }
 
   const pendingAnchorTraces = new Set<string>();
 
