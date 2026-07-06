@@ -48,6 +48,7 @@ curl -sf http://localhost:3002/health   # bank-b-proxy
 curl -sf http://localhost:4001/health   # bank-a-agent
 curl -sf http://localhost:4002/health   # bank-b-agent
 curl -sf http://localhost:5001/health   # bank-b-anchor (merkle notary)
+curl -sf http://localhost:3003/health   # trust-agent-cloud (inline co-sign witness, Delta #3)
 curl -sf http://localhost:3000/         # frontend
 ```
 All must return success. Report any that don't, with `docker compose logs <service> --tail 50`.
@@ -169,6 +170,44 @@ Each proxy links its envelope rows into an append-only hash-chain (`seq` + `prev
    ```
 3. **Tamper-detection (do this on the copied `./bank-b.db.tmp`, NOT the live container DB — do not corrupt the running stack):** edit one row's `raw_payload` in the copy, then run the same verify logic against it, or reason from `/verify-chain` semantics. Expected: mutating any row's content breaks its successor's `prev_hash` link; deleting a row opens a `seq` gap — either makes `verifyChain` return `{"valid": false, "error": ...}`. Report whether the break is detected. (You can confirm this deterministically via the unit tests instead: `cd trust-agent && npm test -- hash-chain` — the tamper and gap cases are covered there.)
 
+## Part 3c — Witness inline co-sign & finality gate (Delta #3)
+
+An independent service, **`trust-agent-cloud`** (port 3003), co-signs each transaction *inline between Phase 2 (Acceptance) and Phase 3 (Execution)*. It is independent of both banks: its own durable Ed25519 key (own `TRUSTAGENT_KEYSTORE_KEK`, separate from the banks' KEKs and from any DB), and its own append-only hash-chain. A transaction that cannot obtain a valid witness co-signature is **not** finalized.
+
+1. Confirm the transaction you drove in Part 2 carries a witness co-signature. Bank-A persists it as a `COSIGN` envelope row alongside INTENT/ACCEPTANCE/EXECUTION:
+   ```bash
+   curl -s "http://localhost:3001/envelopes" | python3 -c "
+   import json,sys
+   rows=[e for e in json.load(sys.stdin) if e.get('trace_id')=='<TRACE_ID>']
+   print(sorted({e['type'] for e in rows}))
+   "
+   ```
+   **PASS criterion:** the set includes `COSIGN` (in addition to `INTENT`, `ACCEPTANCE`, `EXECUTION`). The `COSIGN` row's `raw_payload` is a `CoSignReceipt` whose single signature has `role: "witness"` and `kid: did:workload:trustagent-cloud#key-1`, and whose `intent_hash`/`acceptance_hash` bind this trace's envelopes.
+
+2. The witness's own hash-chain verifies clean, and has exactly one link per co-signed transaction:
+   ```bash
+   curl -s http://localhost:3003/verify-chain | python3 -m json.tool   # expect {"valid": true}
+   docker compose exec trust-agent-cloud sh -c "sqlite3 /data/trust-agent-cloud.db 'SELECT seq, substr(prev_hash,1,12), type, trace_id FROM cosigns ORDER BY seq;'" 2>/dev/null \
+     || (docker cp trust-agent-cloud:/data/trust-agent-cloud.db ./tac.db.tmp && sqlite3 ./tac.db.tmp "SELECT seq, substr(prev_hash,1,12), type, trace_id FROM cosigns ORDER BY seq;")
+   ```
+   Expect a gapless `seq` (0,1,2,…), non-null `prev_hash`, `type=COSIGN`, one row per `trace_id`.
+
+3. Witness key durability (same guarantee as Delta #1, for the witness): the keystore is encrypted at rest and the public key survives a restart.
+   ```bash
+   docker compose exec trust-agent-cloud cat /data/trust-agent-cloud-keystore.json   # JSON {kid, publicKey, iv, ciphertext, tag}
+   docker compose restart trust-agent-cloud                                          # wait until healthy
+   curl -s http://localhost:3003/health                                             # witness_kid unchanged
+   docker compose exec trust-agent-cloud sh -c "strings /data/trust-agent-cloud.db | grep -i privatekey" || true   # must be empty
+   ```
+   **PASS criterion:** keystore is JSON with an encrypted `ciphertext` (no plaintext key), `witness_kid` is identical after restart, and no private-key material appears in the DB.
+
+4. Finality gate (proves the witness is load-bearing, not decorative). With the stack up, take the witness offline, drive a fresh transaction, and confirm it does **not** finalize:
+   ```bash
+   docker compose stop trust-agent-cloud
+   curl -sf -X POST http://localhost:3001/trigger    # or POST /invoke; watch bank-a-proxy logs
+   ```
+   **PASS criterion:** the new transaction is rejected/never completes (Proxy A returns a witness error, code `-32006`, and does **not** produce an EXECUTION for that new trace) — a transaction without a valid co-signature is not valid. Restart the witness afterwards (`docker compose start trust-agent-cloud`, wait healthy). *(Optional deterministic equivalent: `cd trust-agent && npm test -- trust-proxy` covers the gate; `cd trust-agent-cloud && npm test` covers witness verification, chaining, and idempotency.)*
+
 ## Part 4 — Force the on-chain anchor and verify it for real
 
 1. Trigger an immediate anchor of whatever's pending (don't wait for the auto-batch threshold):
@@ -216,5 +255,6 @@ Produce a single markdown report with:
 4. **DB persistence** — row counts/contents from both banks' SQLite, signature re-verification result.
 5. **On-chain anchor** — `tx_hash`, `block_number`, RPC receipt status, Merkle proof verification result, Basescan link.
 6. **Dispute pack** — confirm retrievable and internally consistent.
-7. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates Delta #1 (key custody) plus the pre-existing anchor pipeline; it does **not** exercise Deltas #2–7 (hash-chain, inline co-signer, checkpoint/heartbeat, WORM content store, key-transparency, degraded-mode) since those aren't implemented yet — say so plainly rather than implying broader coverage than what ran.
+7. **Witness co-sign (Delta #3)** — `COSIGN` present for the trace, witness `/verify-chain` valid + gapless `cosigns` rows, witness key durable across restart with no leaked private material, and the finality-gate result (transaction rejected while the witness was down).
+8. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates Delta #1 (key custody), Delta #2 (hash-chain), Delta #3 (inline co-sign witness + finality gate), plus the pre-existing anchor pipeline; it does **not** exercise Deltas #4–7 (checkpoint/heartbeat anchoring, WORM content store, key-transparency, degraded-mode) since those aren't implemented yet — say so plainly rather than implying broader coverage than what ran. Residual (by design, DISPUTE_HARDENING §5.3): "TrustAgentAI + one bank colluding" is **not** closed by Delta #3.
 8. Any CRITICAL findings called out at the very top, before the section-by-section detail.
