@@ -22,7 +22,7 @@ export interface KeyPair {
 }
 
 export interface SignatureBlock {
-  role: "proxy" | "agent";
+  role: "proxy" | "agent" | "witness";
   kid: string;
   alg: "EdDSA";
   signed_digest: string;  // hex SHA-256 of the JCS envelope
@@ -140,7 +140,7 @@ export function sha256(input: string | Buffer): string {
 export async function signEnvelope(
   envelope: Record<string, unknown>,
   keyPair: KeyPair,
-  role: "proxy" | "agent" = "proxy",
+  role: "proxy" | "agent" | "witness" = "proxy",
   attestationRef?: string
 ): Promise<SignatureBlock> {
   const signed_digest = computeEnvelopeHash(envelope);
