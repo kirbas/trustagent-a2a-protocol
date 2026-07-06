@@ -21,10 +21,11 @@ import {
   verifyEnvelopeChain,
 } from "./db.js";
 import { SseBus } from "./sse.js";
-import { registerWithProxyB } from "./key-exchange.js";
+import { registerWithProxyB, registerWithWitness } from "./key-exchange.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const PROXY_B_URL = process.env.PROXY_B_URL ?? "http://bank-b-proxy:3002";
+const TRUSTAGENT_URL = process.env.TRUSTAGENT_URL;
 const DB_PATH = process.env.DB_PATH ?? "/data/bank-a.db";
 const KEYSTORE_PATH = process.env.KEYSTORE_PATH ?? "/data/bank-a-keystore.json";
 const KEYSTORE_KEK = process.env.KEYSTORE_KEK;
@@ -56,11 +57,22 @@ async function main(): Promise<void> {
   const proxyA = new ProxyAGateway({
     proxyKey,
     proxyBEndpoint: PROXY_B_URL,
+    witnessEndpoint: TRUSTAGENT_URL,
     ttlSeconds: 60,
   });
 
   const publicKeyHex = Buffer.from(proxyKey.publicKey).toString("hex");
   await registerWithProxyB(PROXY_B_URL, PROXY_KID, publicKeyHex);
+
+  // Delta #3: register our key with the independent witness so it can verify
+  // our Intent signature before co-signing (finality gate).
+  if (TRUSTAGENT_URL) {
+    try {
+      await registerWithWitness(TRUSTAGENT_URL, PROXY_KID, publicKeyHex);
+    } catch (e) {
+      console.warn("[key-exchange] witness registration failed", e);
+    }
+  }
 
   const app = express();
   app.use(express.json());
@@ -235,15 +247,24 @@ async function main(): Promise<void> {
         return;
       }
 
-      const { intent_envelope: intent, acceptance_receipt: acceptance, execution_envelope: execution } =
+      const { intent_envelope: intent, acceptance_receipt: acceptance, execution_envelope: execution, cosign_receipt: cosign } =
         mcpResult.result!._a2a!;
 
       saveEnvelope(intent.trace_id + ":intent", "INTENT", intent.trace_id, intent, JSON.stringify(intent.signatures));
       saveEnvelope(acceptance.trace_id + ":acceptance", "ACCEPTANCE", acceptance.trace_id, acceptance, JSON.stringify(acceptance.signatures));
       saveEnvelope(execution.trace_id + ":execution", "EXECUTION", execution.trace_id, execution, JSON.stringify(execution.signatures));
 
+      // Delta #3: persist the independent witness co-signature alongside the
+      // handshake envelopes so it is visible in the dispute pack / UI.
+      if (cosign) {
+        saveEnvelope(cosign.trace_id + ":cosign", "COSIGN", cosign.trace_id, cosign, JSON.stringify(cosign.signatures));
+      }
+
       sseBus.broadcast("envelope", { type: "INTENT", traceId: intent.trace_id, tool, cost, ts });
       sseBus.broadcast("envelope", { type: "ACCEPTANCE", traceId: acceptance.trace_id, ts });
+      if (cosign) {
+        sseBus.broadcast("envelope", { type: "COSIGN", traceId: cosign.trace_id, ts });
+      }
 
       sseBus.broadcast("execution-complete", {
         traceId: execution.trace_id,
