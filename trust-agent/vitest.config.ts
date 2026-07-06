@@ -7,7 +7,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
-      include: ["src/crypto.ts", "src/hash-chain.ts"],
+      include: ["src/crypto.ts", "src/hash-chain.ts", "src/co-sign.ts"],
       thresholds: {
         lines: 80,
         functions: 80,

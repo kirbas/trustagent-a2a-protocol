@@ -30,6 +30,7 @@ import { verifySignature, signEnvelope } from "./crypto.js";
 import type { KeyPair } from "./crypto.js";
 import { buildIntentEnvelope, buildAcceptanceReceipt, buildExecutionEnvelope } from "./envelopes.js";
 import type { IntentEnvelope, AcceptanceReceipt, ExecutionEnvelope, ContentProvenanceReceipt } from "./envelopes.js";
+import type { CoSignReceipt } from "./co-sign.js";
 import { DAGLedger } from "./ledger.js";
 import { NonceRegistry } from "./nonce-registry.js";
 import { RiskBudgetEngine } from "./risk-budget.js";
@@ -67,6 +68,8 @@ export interface McpToolResult {
       intent_envelope: IntentEnvelope;
       acceptance_receipt: AcceptanceReceipt;
       execution_envelope: ExecutionEnvelope;
+      /** Delta #3: inline witness co-signature. Present when a witness is configured. */
+      cosign_receipt?: CoSignReceipt;
     };
   };
   error?: {
@@ -82,6 +85,7 @@ const ERR_BUDGET_EXCEEDED = -32002;
 const ERR_REPLAY = -32003;
 const ERR_EXPIRED = -32004;
 const ERR_INVALID_SIGNATURE = -32005;
+const ERR_WITNESS_UNAVAILABLE = -32006;
 
 // ─── Proxy A (Initiator Side) ─────────────────────────────────────────────────
 
@@ -90,6 +94,10 @@ export interface ProxyAConfig {
   agentKey?: KeyPair;         // for Dual-Sign
   attestationRef?: string;
   proxyBEndpoint: string;     // URL of Proxy B's /accept endpoint
+  /** Delta #3: independent witness (TrustAgentAI Cloud) /co-sign endpoint. When
+   *  set, a valid inline co-signature is REQUIRED for the transaction to
+   *  finalize; when unset, the gate is skipped (backward compatible). */
+  witnessEndpoint?: string;
   ttlSeconds?: number;
 }
 
@@ -148,6 +156,28 @@ export class ProxyAGateway {
       return this._mcpError(call.id, ERR_UNAUTHORIZED, `Proxy B unreachable: ${err}`);
     }
 
+    // 2.5 Independent witness co-signature (Delta #3). Inline between Phase 2
+    // (Acceptance) and Phase 3 (Execution): the witness verifies both proxy
+    // signatures and co-signs. Without a valid co-signature the transaction is
+    // NOT finalized and the tool is NOT executed — the finality gate.
+    let cosign: CoSignReceipt | undefined;
+    if (this.cfg.witnessEndpoint) {
+      try {
+        const resp = await fetch(`${this.cfg.witnessEndpoint}/co-sign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ intent: intentEnv, acceptance }),
+        });
+        const body = await resp.json() as { cosign_receipt?: CoSignReceipt; error?: string };
+        if (!resp.ok || !body.cosign_receipt) {
+          return this._mcpError(call.id, ERR_WITNESS_UNAVAILABLE, body.error ?? "Witness declined to co-sign", { traceId: intentEnv.trace_id });
+        }
+        cosign = body.cosign_receipt;
+      } catch (err) {
+        return this._mcpError(call.id, ERR_WITNESS_UNAVAILABLE, `Witness unreachable: ${err}`, { traceId: intentEnv.trace_id });
+      }
+    }
+
     // 3. Execute the actual tool
     let outputData: unknown;
     let status: "COMPLETED" | "FAILED" = "COMPLETED";
@@ -194,7 +224,12 @@ export class ProxyAGateway {
       id: call.id,
       result: {
         content: [{ type: "text", text: JSON.stringify(outputData) }],
-        _a2a: { intent_envelope: intentEnv, acceptance_receipt: acceptance, execution_envelope: finalExecutionEnv },
+        _a2a: {
+          intent_envelope: intentEnv,
+          acceptance_receipt: acceptance,
+          execution_envelope: finalExecutionEnv,
+          ...(cosign ? { cosign_receipt: cosign } : {}),
+        },
       },
     };
   }
