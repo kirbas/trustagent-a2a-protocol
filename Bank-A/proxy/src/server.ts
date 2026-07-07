@@ -5,9 +5,12 @@ import {
   loadOrCreateKeyPair,
   ProxyAGateway,
   buildContentProvenanceReceipt,
+  buildWormRecord,
+  canonicalBytes,
   sha256Json,
   computeEnvelopeHash,
   type McpToolCall,
+  type Holder,
 } from "@trustagentai/a2a-core";
 import {
   initDb,
@@ -20,6 +23,7 @@ import {
   getThoughts,
   verifyEnvelopeChain,
 } from "./db.js";
+import { initWormDb, putContentBlob } from "./worm-db.js";
 import { SseBus } from "./sse.js";
 import { registerWithProxyB, registerWithWitness } from "./key-exchange.js";
 
@@ -31,8 +35,24 @@ const KEYSTORE_PATH = process.env.KEYSTORE_PATH ?? "/data/bank-a-keystore.json";
 const KEYSTORE_KEK = process.env.KEYSTORE_KEK;
 const INITIATOR_DID = "did:workload:bank-a-agent";
 const PROXY_KID = "did:workload:bank-a-proxy#key-1";
+const WORM_DB_PATH = process.env.WORM_DB_PATH ?? DB_PATH;
 
 let triggered = false;
+
+/**
+ * Delta #5: content-encryption KEKs, one per WORM holder. Distinct from the
+ * identity KEYSTORE_KEK above — these wrap per-transaction DEKs, not signing
+ * keys. Optional: if any is missing the WORM store is disabled for this run
+ * (existing happy-path keeps working; see docs/execution_plan.md §5).
+ */
+function parseContentKek(envVar: string): Buffer | undefined {
+  const value = process.env[envVar];
+  if (!value) return undefined;
+  if (!/^[0-9a-fA-F]{64}$/.test(value)) {
+    throw new Error(`${envVar} must be 64 hex characters (32 bytes)`);
+  }
+  return Buffer.from(value, "hex");
+}
 
 async function main(): Promise<void> {
   if (!KEYSTORE_KEK) {
@@ -52,7 +72,52 @@ async function main(): Promise<void> {
   }
 
   initDb(DB_PATH);
+  initWormDb(WORM_DB_PATH);
   const sseBus = new SseBus();
+
+  // Delta #5: WORM content store holders. Bank-A is the plaintext origin, so
+  // it builds the encrypted record and wraps the DEK for every cross-held
+  // party plus a regulator escrow entry that TrustAgentAI cannot unwrap
+  // (DISPUTE_HARDENING §5.4).
+  const bankAKek = parseContentKek("BANK_A_CONTENT_KEK");
+  const clientKek = parseContentKek("CLIENT_CONTENT_KEK");
+  const witnessContentKek = parseContentKek("TRUSTAGENT_CONTENT_KEK");
+  const regulatorKek = parseContentKek("REGULATOR_ESCROW_KEK");
+  const wormHolders: Holder[] | undefined =
+    bankAKek && clientKek && witnessContentKek
+      ? [
+          { id: "bank-a", kek: bankAKek },
+          { id: "client", kek: clientKek },
+          { id: "witness", kek: witnessContentKek },
+        ]
+      : undefined;
+  const wormEscrow: Holder | undefined = regulatorKek ? { id: "regulator", kek: regulatorKek } : undefined;
+  if (!wormHolders || !wormEscrow) {
+    console.warn("[worm] content-KEK env vars not fully configured — WORM content store disabled");
+  }
+
+  async function storeWormContent(value: unknown): Promise<void> {
+    if (!wormHolders || !wormEscrow) return;
+    try {
+      const plaintext = canonicalBytes(value);
+      const record = buildWormRecord(plaintext, wormHolders, wormEscrow);
+      putContentBlob(record.contentHash, record);
+      if (TRUSTAGENT_URL) {
+        await fetch(`${TRUSTAGENT_URL}/blob/${record.contentHash}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ciphertext: record.ciphertext,
+            iv: record.iv,
+            tag: record.tag,
+            wrappedDeks: record.wrappedDeks,
+          }),
+        });
+      }
+    } catch (e) {
+      console.warn("[worm] failed to store/cross-push content blob", e);
+    }
+  }
 
   const proxyA = new ProxyAGateway({
     proxyKey,
@@ -274,6 +339,15 @@ async function main(): Promise<void> {
         ts,
       });
       sseBus.broadcast("envelope", { type: "EXECUTION", traceId: execution.trace_id, ts });
+
+      // Delta #5: persist args/outputData as encrypted, content-addressed WORM
+      // blobs. Today only sha256Json(args)/sha256Json(outputData) survive in
+      // the envelopes (args_hash/output_hash) — this makes the plaintext they
+      // commit to recoverable by a holder, without ever storing it in the
+      // clear ourselves.
+      const outputData: unknown = JSON.parse(mcpResult.result!.content[0].text);
+      await storeWormContent(args);
+      await storeWormContent(outputData);
 
       const contentHash = sha256Json(mcpResult.result!.content);
       const contentSize = Buffer.byteLength(JSON.stringify(mcpResult.result!.content));
