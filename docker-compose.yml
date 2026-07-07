@@ -81,6 +81,14 @@ services:
       DB_PATH: "/data/bank-a.db"
       KEYSTORE_PATH: "/data/bank-a-keystore.json"
       KEYSTORE_KEK: "${BANK_A_KEYSTORE_KEK}"
+      # Delta #5: WORM content store — per-holder envelope-encryption KEKs.
+      # All four must be set for Bank-A to actually store/cross-push content;
+      # if any is missing the proxy logs a warning and skips WORM storage
+      # (existing envelope/hash-chain/witness behavior is unaffected).
+      BANK_A_CONTENT_KEK: "${BANK_A_CONTENT_KEK}"
+      CLIENT_CONTENT_KEK: "${CLIENT_CONTENT_KEK}"
+      TRUSTAGENT_CONTENT_KEK: "${TRUSTAGENT_CONTENT_KEK}"
+      REGULATOR_ESCROW_KEK: "${REGULATOR_ESCROW_KEK}"
     volumes:
       - bank-a-data:/data
     depends_on:
