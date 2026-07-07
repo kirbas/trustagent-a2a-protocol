@@ -208,6 +208,69 @@ An independent service, **`trust-agent-cloud`** (port 3003), co-signs each trans
    ```
    **PASS criterion:** the new transaction is rejected/never completes (Proxy A returns a witness error, code `-32006`, and does **not** produce an EXECUTION for that new trace) — a transaction without a valid co-signature is not valid. Restart the witness afterwards (`docker compose start trust-agent-cloud`, wait healthy). *(Optional deterministic equivalent: `cd trust-agent && npm test -- trust-proxy` covers the gate; `cd trust-agent-cloud && npm test` covers witness verification, chaining, and idempotency.)*
 
+## Part 3d — WORM content store & envelope-encryption (Delta #5)
+
+`args`/`outputData` are no longer discarded — Bank-A persists them as encrypted, content-addressed WORM blobs (per-tx DEK, AES-256-GCM), envelope-encrypted for each holder (`bank-a`, `client`, `witness`) plus a separate regulator escrow entry. Requires `BANK_A_CONTENT_KEK`, `CLIENT_CONTENT_KEK`, `TRUSTAGENT_CONTENT_KEK`, `REGULATOR_ESCROW_KEK` in `.env` — WORM storage silently no-ops (existing flow keeps working) if any is missing.
+
+1. Confirm WORM is active (no "disabled" warning):
+   ```bash
+   docker compose logs bank-a-proxy | grep -i worm
+   ```
+   If it shows "content-KEK env vars not fully configured", set the 4 vars above in `.env`, `docker compose up -d --build bank-a-proxy`, and re-drive Part 2 before continuing.
+
+2. **DoD #1 — content address equals the envelope's committed hash.** Pull the trace's `args_hash`/`output_hash` and Bank-A's local blob table:
+   ```bash
+   curl -s "http://localhost:3001/envelopes" | python3 -c "
+   import json,sys
+   rows=[e for e in json.load(sys.stdin) if e.get('trace_id')=='<TRACE_ID>']
+   for r in rows:
+       if r['type'] in ('INTENT','EXECUTION'):
+           p=json.loads(r['raw_payload'])
+           print(r['type'], p.get('payload',{}).get('args_hash') or p.get('result',{}).get('output_hash'))
+   "
+   docker compose exec bank-a-proxy sh -c "sqlite3 /data/bank-a.db 'SELECT content_hash FROM content_blobs;'" 2>/dev/null \
+     || (docker cp bank-a-proxy:/data/bank-a.db ./bank-a.db.tmp && sqlite3 ./bank-a.db.tmp "SELECT content_hash FROM content_blobs;")
+   ```
+   **PASS criterion:** the `content_hash` values include the `args_hash`/`output_hash` printed above — the WORM blob id is exactly `sha256(plaintext)`, the same commitment already in the envelope.
+
+3. Confirm only ciphertext is stored — never plaintext or a bare key:
+   ```bash
+   docker compose exec bank-a-proxy sh -c "sqlite3 /data/bank-a.db 'SELECT ciphertext, wrapped_deks FROM content_blobs LIMIT 1;'" 2>/dev/null \
+     || sqlite3 ./bank-a.db.tmp "SELECT ciphertext, wrapped_deks FROM content_blobs LIMIT 1;"
+   ```
+   `ciphertext` must be opaque hex (not recognizable plaintext/JSON); `wrapped_deks` must be a JSON object of `{iv, ciphertext, tag}` entries per holder — never a raw key.
+
+4. **Cross-hold.** The same encrypted record must also be retrievable from the witness:
+   ```bash
+   curl -s "http://localhost:3003/blob/<CONTENT_HASH>" | python3 -m json.tool
+   ```
+   **PASS criterion:** 200, with `ciphertext`/`iv`/`tag` identical to Bank-A's local row — content is cross-held on ≥2 independent stores (Bank-A + TrustAgentAI), not just locally.
+
+5. **Write-once (WORM) rejection.** Re-`PUT` the same content hash with different ciphertext:
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}\n" -X PUT "http://localhost:3003/blob/<CONTENT_HASH>" \
+     -H 'content-type: application/json' -d '{"ciphertext":"00","iv":"00","tag":"00","wrappedDeks":{}}'
+   ```
+   **PASS criterion:** non-2xx (409) — a second write under the same content hash with different bytes is refused. Re-`PUT`-ting the exact same body from step 4 must instead return 200 with `created:false` (idempotent).
+
+6. **Escrow (Decision #11 / DISPUTE §5.4).** No running key material exists to hand a QA agent for this — that is the point of the design. Exercise it via the unit tests instead:
+   ```bash
+   cd /home/ikarin/Trust-Agent/trust-agent && npx vitest run src/worm-store.test.ts
+   ```
+   **PASS criterion:** all pass, including `"lets the regulator unwrap the escrow entry but not the witness"`.
+
+7. Confirm the witness's own environment never has the escrow key:
+   ```bash
+   docker compose exec trust-agent-cloud sh -c 'env | grep -i escrow' || true
+   ```
+   **PASS criterion:** empty output — escrow is not held by TrustAgentAI.
+
+8. `verifyChain` is unaffected (WORM storage is additive, not a chain change):
+   ```bash
+   curl -s http://localhost:3001/verify-chain | python3 -m json.tool   # still {"valid": true}
+   curl -s http://localhost:3003/verify-chain | python3 -m json.tool   # still {"valid": true}
+   ```
+
 ## Part 4 — Force the on-chain anchor and verify it for real
 
 1. Trigger an immediate anchor of whatever's pending (don't wait for the auto-batch threshold):
@@ -265,7 +328,7 @@ The anchor now also anchors each party's **chain HEAD checkpoint** (`{party, hea
 ```bash
 curl -s "http://localhost:3002/dispute/<id — see /dispute/:id route in Bank-B/proxy/src/server.ts>" | python3 -m json.tool
 ```
-Confirm it returns a coherent bundle (envelopes + Merkle proof) for the transaction you drove, and that `args`/`output` fields are hashes only, not raw plaintext (that's expected/by-design for this stage — Delta #5 is what would change it, not in scope here).
+Confirm it returns a coherent bundle (envelopes + Merkle proof) for the transaction you drove. The pack itself still carries only hashes (`args_hash`/`output_hash`) — recovering the plaintext they commit to is the WORM store's job (Part 3d), fetched separately by a holder, not inlined into this bundle.
 
 ## Cleanup
 
@@ -286,5 +349,6 @@ Produce a single markdown report with:
 6. **Dispute pack** — confirm retrievable and internally consistent.
 7. **Witness co-sign (Delta #3)** — `COSIGN` present for the trace, witness `/verify-chain` valid + gapless `cosigns` rows, witness key durable across restart with no leaked private material, and the finality-gate result (transaction rejected while the witness was down).
 8. **Checkpoint & heartbeat (Delta #4)** — HEAD checkpoint anchored (tx on-chain, data = commitment), idempotent no-op on unchanged head, gapless `checkpoints`; heartbeats chain + increment with confirmed txs.
-9. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates Delta #1 (key custody), Delta #2 (hash-chain), Delta #3 (inline co-sign witness + finality gate), Delta #4 (chain HEAD checkpoint + on-chain heartbeat), plus the pre-existing anchor pipeline; it does **not** exercise Deltas #5–7 (WORM content store, key-transparency, degraded-mode) since those aren't implemented yet — say so plainly rather than implying broader coverage than what ran. Residual (by design, DISPUTE_HARDENING §5.3): "TrustAgentAI + one bank colluding" is **not** closed. Delta #4 narrows §5.2 (a heartbeat gap now makes anchor/witness downtime publicly provable) but full degraded-mode discipline (reconciliation window + value cap) is Delta #7.
-8. Any CRITICAL findings called out at the very top, before the section-by-section detail.
+9. **WORM content store (Delta #5)** — content-address == envelope commitment (DoD #1), only ciphertext + wrapped-DEKs ever at rest, cross-held on Bank-A + witness, write-once rejection of a differing PUT under an existing hash (with idempotent accept of the identical one), escrow unit test result, and confirmation the witness's own env never holds the escrow key.
+10. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates Delta #1 (key custody), Delta #2 (hash-chain), Delta #3 (inline co-sign witness + finality gate), Delta #4 (chain HEAD checkpoint + on-chain heartbeat), Delta #5 (WORM content store + envelope-encryption), plus the pre-existing anchor pipeline; it does **not** exercise Deltas #6–7 (key-transparency registry, degraded-mode discipline) since those aren't implemented yet — say so plainly rather than implying broader coverage than what ran. Residual (by design, DISPUTE_HARDENING §5.3): "TrustAgentAI + one bank colluding" is **not** closed. Delta #4 narrows §5.2 (a heartbeat gap now makes anchor/witness downtime publicly provable) but full degraded-mode discipline (reconciliation window + value cap) is Delta #7. Delta #5's holder-KEK model is still a pre-shared symmetric secret (same simplification as every other KEK in this repo) — Bank-A, as plaintext origin, ends up holding the witness's and client's content-KEK values too in order to wrap their DEK copies; note this as a residual, not a regression, since no confidentiality is lost versus the pre-Delta-5 baseline (Bank-A always had the plaintext).
+11. Any CRITICAL findings called out at the very top, before the section-by-section detail.
