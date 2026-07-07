@@ -18,6 +18,7 @@ import { loadOrCreateKeyPair } from "@trustagentai/a2a-core";
 import type { IntentEnvelope, AcceptanceReceipt } from "@trustagentai/a2a-core";
 import { initDb, verifyCoSignChain, clearCoSigns } from "./db.js";
 import { CoSignService } from "./witness.js";
+import { initBlobDb, putBlob, getBlob, clearBlobs, type BlobInput } from "./blob-db.js";
 
 const PORT = Number(process.env.PORT ?? 3003);
 const DB_PATH = process.env.DB_PATH ?? "/data/trust-agent-cloud.db";
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
   }
   const witnessKey = await loadOrCreateKeyPair(WITNESS_KID, KEYSTORE_PATH, KEYSTORE_KEK);
   initDb(DB_PATH);
+  initBlobDb(DB_PATH);
   const service = new CoSignService(witnessKey);
 
   const app = express();
@@ -79,8 +81,37 @@ async function main(): Promise<void> {
 
   app.get("/verify-chain", (_req, res) => res.json(verifyCoSignChain()));
 
+  // Delta #5: WORM content store. The witness is one of the cross-held
+  // copies of the encrypted (never plaintext) transaction content — it only
+  // ever sees ciphertext + wrapped DEKs, and its own wrapped-DEK entry is the
+  // only one it could ever unwrap.
+  app.put("/blob/:contentHash", (req, res) => {
+    const { contentHash } = req.params;
+    const blob = req.body as BlobInput;
+    if (!blob?.ciphertext || !blob?.iv || !blob?.tag || !blob?.wrappedDeks) {
+      res.status(400).json({ error: "ciphertext, iv, tag, and wrappedDeks are required" });
+      return;
+    }
+    try {
+      const { created } = putBlob(contentHash, blob);
+      res.status(created ? 201 : 200).json({ ok: true, created });
+    } catch (err) {
+      res.status(409).json({ error: String(err) });
+    }
+  });
+
+  app.get("/blob/:contentHash", (req, res) => {
+    const blob = getBlob(req.params.contentHash);
+    if (!blob) {
+      res.status(404).json({ error: "blob not found" });
+      return;
+    }
+    res.json(blob);
+  });
+
   app.post("/reset", (_req, res) => {
     clearCoSigns();
+    clearBlobs();
     res.json({ ok: true });
   });
 
