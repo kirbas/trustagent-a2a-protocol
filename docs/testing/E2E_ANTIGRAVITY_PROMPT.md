@@ -231,6 +231,35 @@ An independent service, **`trust-agent-cloud`** (port 3003), co-signs each trans
    ```
    Confirm the response indicates the proof is valid for your `trace_id`'s leaf.
 
+## Part 4b — Chain HEAD checkpoint & heartbeat (Delta #4)
+
+The anchor now also anchors each party's **chain HEAD checkpoint** (`{party, head_seq, head_prev_hash, row_count}` → 32-byte commitment) and can publish a **monotonic on-chain heartbeat**. Per the design these close *"when"* (public ordering/time), not tampering — so the commitment binds only chain-position fields.
+
+1. Anchor the Bank-B chain HEAD checkpoint (after Part 2 drove at least one transaction, so the chain is non-empty):
+   ```bash
+   curl -sf -X POST http://localhost:5001/checkpoint | python3 -m json.tool
+   ```
+   Expect `status: "success"`, a `headSeq`/`rowCount` matching Bank-B's `/verify-chain` head, a `commitment`, and a real `txHash`/`blockNumber`. Verify the tx on Base Sepolia independently:
+   ```bash
+   curl -s -X POST "$RPC_URL" -H 'content-type: application/json' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"eth_getTransactionReceipt","params":["<TX_HASH>"]}' | python3 -m json.tool
+   ```
+   `status` must be `"0x1"`, and the tx `input`/`data` must equal `0x<commitment>`.
+
+2. Idempotence: re-POST `/checkpoint` with **no new envelopes** → `status: "noop"` (`head unchanged`), no new on-chain tx. Then drive another transaction (Part 2) and re-POST → a **new** checkpoint at a higher `headSeq`.
+   ```bash
+   curl -s http://localhost:5001/checkpoints | python3 -m json.tool   # gapless, head_seq increasing, status CONFIRMED
+   ```
+
+3. Heartbeat — publish two beats and confirm they chain and increment:
+   ```bash
+   curl -sf -X POST http://localhost:5001/heartbeat | python3 -m json.tool   # seq 0
+   curl -sf -X POST http://localhost:5001/heartbeat | python3 -m json.tool   # seq 1
+   curl -s http://localhost:5001/heartbeats | python3 -m json.tool
+   ```
+   **PASS criterion:** `seq` is a gapless 0,1,…; each beat's `prev_hash` equals the previous beat's `commitment` (genesis `0×64` for seq 0); each carries a confirmed `tx_hash`. (The periodic background publisher is opt-in via `HEARTBEAT_ENABLED=true` — it continuously spends gas, so leave it off unless specifically exercising it; the endpoints above are sufficient.)
+   *(Optional deterministic equivalent, no gas: `cd Bank-B/merkle-anchor && python3 -m pytest` — checkpoint HEAD/idempotence/gap-refusal and heartbeat chaining/gap-detection are covered against a mocked notary.)*
+
 ## Part 5 — Dispute pack sanity check
 
 ```bash
@@ -256,5 +285,6 @@ Produce a single markdown report with:
 5. **On-chain anchor** — `tx_hash`, `block_number`, RPC receipt status, Merkle proof verification result, Basescan link.
 6. **Dispute pack** — confirm retrievable and internally consistent.
 7. **Witness co-sign (Delta #3)** — `COSIGN` present for the trace, witness `/verify-chain` valid + gapless `cosigns` rows, witness key durable across restart with no leaked private material, and the finality-gate result (transaction rejected while the witness was down).
-8. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates Delta #1 (key custody), Delta #2 (hash-chain), Delta #3 (inline co-sign witness + finality gate), plus the pre-existing anchor pipeline; it does **not** exercise Deltas #4–7 (checkpoint/heartbeat anchoring, WORM content store, key-transparency, degraded-mode) since those aren't implemented yet — say so plainly rather than implying broader coverage than what ran. Residual (by design, DISPUTE_HARDENING §5.3): "TrustAgentAI + one bank colluding" is **not** closed by Delta #3.
+8. **Checkpoint & heartbeat (Delta #4)** — HEAD checkpoint anchored (tx on-chain, data = commitment), idempotent no-op on unchanged head, gapless `checkpoints`; heartbeats chain + increment with confirmed txs.
+9. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates Delta #1 (key custody), Delta #2 (hash-chain), Delta #3 (inline co-sign witness + finality gate), Delta #4 (chain HEAD checkpoint + on-chain heartbeat), plus the pre-existing anchor pipeline; it does **not** exercise Deltas #5–7 (WORM content store, key-transparency, degraded-mode) since those aren't implemented yet — say so plainly rather than implying broader coverage than what ran. Residual (by design, DISPUTE_HARDENING §5.3): "TrustAgentAI + one bank colluding" is **not** closed. Delta #4 narrows §5.2 (a heartbeat gap now makes anchor/witness downtime publicly provable) but full degraded-mode discipline (reconciliation window + value cap) is Delta #7.
 8. Any CRITICAL findings called out at the very top, before the section-by-section detail.
