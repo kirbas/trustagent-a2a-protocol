@@ -44,10 +44,10 @@ Monorepo, three runtime languages:
 export interface KeyPair { privateKey: Uint8Array; publicKey: Uint8Array; kid: string; }
 export async function generateKeyPair(kid: string): Promise<KeyPair>
 ```
-Keys are generated fresh at boot in `server.ts` and never persisted — this is the target of Delta #1.
+~~Keys are generated fresh at boot~~ — **resolved in Delta #1**: both proxies and the witness now load a durable Ed25519 identity via `loadOrCreateKeyPair(kid, keystorePath, kek)` from an encrypted (AES-256-GCM) keystore, KEK from env (`KEYSTORE_PATH`/`KEYSTORE_KEK`), fail-fast when absent.
 
-### ⚠ Test infrastructure gap
-The proxies have **no test runner** (`package.json` scripts are only `build`/`start`). Delta #1 must **stand up a test harness first**. Recommended: **Vitest** (native ESM + TS, works with the existing tsconfig). Add `"test"` and `"test:coverage"` scripts. This is a prerequisite, not optional — the working agreement below mandates TDD.
+### Test infrastructure (stood up)
+**Vitest** in `trust-agent/` and `trust-agent-cloud/` (`npm test`, `npm run test:coverage`, 80% threshold in `vitest.config.ts` — add new modules to `coverage.include`). **pytest** in `Bank-B/merkle-anchor/` (`python3 -m pytest`, `pyproject.toml`, `requirements-dev.txt`). The bank proxies still delegate their tested logic to `@trustagentai/a2a-core`; keep new pure logic there.
 
 ## 4. Working agreement (non-negotiable)
 
@@ -61,7 +61,7 @@ The proxies have **no test runner** (`package.json` scripts are only `build`/`st
 
 ## 5. Delta backlog (execute in order — each unblocks the next)
 
-### Delta #1 — Durable, custodied keys  ← START HERE
+### Delta #1 — Durable, custodied keys  ✅ DONE (PR #18, merged to main)
 **Objective:** proxies load a persistent Ed25519 identity from an **encrypted keystore** instead of minting a new key every boot. KEK comes from a secret separate from the DB.
 
 - **Files:** [trust-agent/src/crypto.ts](../trust-agent/src/crypto.ts) (add keystore fns), [Bank-A/proxy/src/server.ts:34](../Bank-A/proxy/src/server.ts#L34), [Bank-B/proxy/src/server.ts:84](../Bank-B/proxy/src/server.ts#L84).
@@ -78,19 +78,36 @@ The proxies have **no test runner** (`package.json` scripts are only `build`/`st
 - **Tests (write first):** same-key-on-reload; tamper-ciphertext → auth failure; wrong-KEK → failure; new keystore created when absent; env-missing → fail-fast.
 - **Residual note:** software keys are a knowingly-accepted compromise (see DISPUTE_HARDENING §5.1). The KEK-isolation requirement is what makes it meaningful — do not shortcut it.
 
-### Delta #2 — Append-only hash-chain
+### Delta #2 — Append-only hash-chain  ✅ DONE (PR #19, merged to main)
 Add `seq` (monotonic per party) + `prev_hash` to the `envelopes` table; on write, link each row to the previous head; expose a chain-verify function (no gaps, links intact).
-→ [Bank-A/proxy/src/db.ts](../Bank-A/proxy/src/db.ts), [Bank-B/proxy/src/db.ts](../Bank-B/proxy/src/db.ts). Migration must handle existing rows.
+→ Shared module [trust-agent/src/hash-chain.ts](../trust-agent/src/hash-chain.ts) (`GENESIS_PREV_HASH`, `computeRowHash`, `verifyChain`, `ChainRow`); [Bank-A/proxy/src/db.ts](../Bank-A/proxy/src/db.ts), [Bank-B/proxy/src/db.ts](../Bank-B/proxy/src/db.ts) link rows + backfill. `GET /verify-chain` on both proxies.
 
-### Delta #3 — TrustAgentAI inline co-sign service (new)
+### Delta #3 — TrustAgentAI inline co-sign service (new)  ✅ DONE (PR #20, open — branch `feat/delta-3-cosign`)
 New service co-signing between handshake Phase 2 and Phase 3; maintains its own hash-chain; gates finality. Wire into `ProxyAGateway`.
+→ Service [trust-agent-cloud/](../trust-agent-cloud/) (own durable key, own `cosigns` chain, `POST /co-sign`, `POST /register-key`, `GET /verify-chain`); pure logic [trust-agent/src/co-sign.ts](../trust-agent/src/co-sign.ts); `ProxyAGateway.witnessEndpoint` gates finality (`_a2a.cosign_receipt`, `ERR_WITNESS_UNAVAILABLE`). **Reusable as a cross-holder for Delta #5.**
 
-### Delta #4 — Checkpoint anchoring + heartbeat
+### Delta #4 — Checkpoint anchoring + heartbeat  ✅ DONE (PR #21, open — stacked on #20, branch `feat/delta-4-anchoring`)
 Anchor the per-party chain **HEAD checkpoint** (not an arbitrary signature batch); add a periodic signed on-chain heartbeat publisher for degraded-mode detection.
-→ [Bank-B/merkle-anchor/app/accounting_agent.py](../Bank-B/merkle-anchor/app/accounting_agent.py), [infra/notary.py](../Bank-B/merkle-anchor/infra/notary.py), [domain/merkle.py](../Bank-B/merkle-anchor/domain/merkle.py).
+→ [domain/checkpoint.py](../Bank-B/merkle-anchor/domain/checkpoint.py), [domain/heartbeat.py](../Bank-B/merkle-anchor/domain/heartbeat.py), [app/checkpoint_agent.py](../Bank-B/merkle-anchor/app/checkpoint_agent.py); endpoints `POST /checkpoint`, `POST /heartbeat`, `GET /checkpoints|/heartbeats`; opt-in periodic publisher (`HEARTBEAT_ENABLED`). Checkpoints Bank-B's chain today; `party`-parameterized so the witness `cosigns` chain is a small follow-up.
 
-### Delta #5 — WORM content store + envelope-encryption
-Persist plaintext args/output as encrypted, content-addressed blobs (per-tx DEK); cross-push to TrustAgentAI + client; bind content hash into the chain. Today these are *"hashed, NOT stored"* ([envelopes.ts:23](../trust-agent/src/envelopes.ts#L23)).
+### Delta #5 — WORM content store + envelope-encryption  ← NEXT (branch `feat/delta-5-worm`, stacked on #4)
+**Objective:** stop discarding the plaintext. Today `args`/`outputData` are *"hashed, NOT stored"* — only `args_hash`/`output_hash` live in envelopes ([envelopes.ts](../trust-agent/src/envelopes.ts): `payload.args_hash = sha256Json(args)`, `result.output_hash = sha256Json(outputData)`; "will be hashed, NOT stored" comments). Persist them as **encrypted, content-addressed WORM blobs**, cross-held so *what* happened survives a two-bank collusion, and stays confidential (DISPUTE §4/§5, Decisions #5 & #11).
+
+- **Settled design (do not re-open):**
+  - **Content-addressed WORM:** blob id = `sha256(plaintext)` = the commitment already in the envelope (**DoD #1**). Write-once: same content → idempotent; different content under the same id → rejected.
+  - **Per-tx DEK:** random 256-bit key per transaction, AES-256-GCM over the content (reuse the AES-GCM pattern in [crypto.ts](../trust-agent/src/crypto.ts)).
+  - **Envelope-encryption:** wrap the DEK under each holder's KEK. Holders = TrustAgentAI (witness), client, banks.
+  - **Regulator escrow:** a separate escrow-wrapped DEK the **regulator** can unwrap and TrustAgentAI **cannot** — escrow key is NOT held by the witness (DISPUTE §5.4). Model the regulator as an independent holder/KEK.
+  - **Cross-push:** after local WORM write, push the encrypted blob to ≥1 other holder (witness `trust-agent-cloud` + a "client" store).
+  - **Bind into chain:** the content commitment is already in the envelope; ensure the WORM blob reconciles with it and `verifyChain` stays valid. Encryption/storage is **additive** — do not break envelope wire shape or `signed_digest`.
+- **Build:** pure crypto/content-addressing modules in [trust-agent/src](../trust-agent/src) (DEK gen, encrypt/decrypt, wrap/unwrap per holder, escrow-wrap, id==commitment check), exported from `@trustagentai/a2a-core`; a WORM blob store + `PUT/GET /blob/:contentHash` on the witness (ciphertext + wrapped-DEKs only, never plaintext/keys) and locally in the proxies; wire into Bank-A `/invoke`; holder/escrow KEKs as env placeholders in `.env.example` (real in gitignored `.env`).
+- **Acceptance criteria:**
+  - Plaintext stored as an encrypted content-addressed blob; `sha256(plaintext)` == the envelope's `args_hash`/`output_hash` (**DoD #1**).
+  - Per-tx DEK; envelope-encryption; regulator escrow present and **NOT** held by TrustAgentAI (§5.4).
+  - Content cross-held (TrustAgentAI + client, minimum).
+  - Logs/SQLite contain only ciphertext + wrapped DEKs — never plaintext content or bare keys/DEK.
+  - Existing happy-path works; builds green in `trust-agent/`, `trust-agent-cloud/`, both proxies; coverage ≥80% on new modules.
+- **Tests (write first):** encrypt↔decrypt round-trip; tamper ciphertext / wrong DEK → GCM auth failure; content-address == commitment (DoD #1); wrap/unwrap under holder KEK round-trip, wrong KEK fails; escrow unwraps for the regulator but not for the witness; WORM write-once (idempotent same-content, reject different-content); cross-hold on ≥2 holders; `verifyChain` still valid.
 
 ### Delta #6 — Key-transparency registry
 Replace mutable `register-peer-key` with an append-only, anchored registry: validity windows, revocation-as-append, rotations endorsed by the prior key.
@@ -112,4 +129,12 @@ An external auditor can run all five checks and any tamper/deletion/fabrication/
 ## 7. Handoff status
 
 - Design: **accepted** (this doc + DISPUTE_HARDENING.md).
-- Code: **not started.** Next action = Delta #1 on branch `feat/delta-1-durable-keys`.
+- Progress (as of 2026-07-06):
+  - **Delta #1** durable keys — ✅ merged (PR #18).
+  - **Delta #2** hash-chain — ✅ merged (PR #19).
+  - **Delta #3** inline co-sign witness — ✅ PR #20 open (`feat/delta-3-cosign`), not yet merged.
+  - **Delta #4** checkpoint + heartbeat — ✅ PR #21 open, **stacked on #20** (`feat/delta-4-anchoring`).
+  - **Delta #5** WORM + envelope-encryption — ⏳ **NEXT.** Branch `feat/delta-5-worm` already created off #4 and pushed.
+- **Branch stack:** `main` → #20 `feat/delta-3-cosign` → #21 `feat/delta-4-anchoring` → `feat/delta-5-worm`. Open Delta #5's PR with **base `feat/delta-4-anchoring`** so the diff is Delta #5 only. Merge order: #20, then #21, then #5's PR. Do not self-merge.
+- **Verification harness:** `docs/testing/E2E_ANTIGRAVITY_PROMPT.md` exercises the full stack (Parts cover Deltas #1–4); extend it per delta.
+- **Next action:** implement **Delta #5** (§5 above) on `feat/delta-5-worm`, strict TDD.
