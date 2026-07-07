@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "--cov=domain.checkpoint --cov=domain.heartbeat --cov=app.checkpoint_agent --cov-report=term-missing --cov-fail-under=80"
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:"]
