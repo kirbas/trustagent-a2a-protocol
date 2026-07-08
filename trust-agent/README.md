@@ -28,6 +28,12 @@ MCP connects agents to tools, but it doesn't make those connections **accountabl
 - **DAG Ledger**: Causal ordering of events with persistent forensic storage.
 - **Merkle Anchoring**: Immutable batching anchored to **Base Sepolia**.
 - **Risk Budget Engine**: Fail-closed enforcement of agent spending limits.
+- **Durable, custodied keys**: identities load from an encrypted keystore (KEK isolated from the DB), not minted fresh every boot.
+- **Append-only hash-chain**: every record links to its predecessor — deletion leaves a gap, edits break the chain.
+- **Independent inline co-signer**: a third-party witness co-signs every transaction; without it, the transaction doesn't finalize.
+- **WORM content store + envelope-encryption**: full transaction content is recoverable by an authorized holder, cross-held, and confidential even at rest — including a regulator escrow path the witness cannot access.
+- **Key-transparency registry**: key rotations must be endorsed by the prior key; revocation is append-only, never silent overwrite.
+- **Degraded-mode discipline**: a witness outage falls back to a capped, reconciled record instead of blocking everything or silently trusting nothing.
 
 ---
 

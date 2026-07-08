@@ -129,12 +129,14 @@ An external auditor can run all five checks and any tamper/deletion/fabrication/
 ## 7. Handoff status
 
 - Design: **accepted** (this doc + DISPUTE_HARDENING.md).
-- Progress (as of 2026-07-06):
+- Progress (as of 2026-07-08): **all 7 deltas complete.**
   - **Delta #1** durable keys — ✅ merged (PR #18).
   - **Delta #2** hash-chain — ✅ merged (PR #19).
-  - **Delta #3** inline co-sign witness — ✅ PR #20 open (`feat/delta-3-cosign`), not yet merged.
-  - **Delta #4** checkpoint + heartbeat — ✅ PR #21 open, **stacked on #20** (`feat/delta-4-anchoring`).
-  - **Delta #5** WORM + envelope-encryption — ⏳ **NEXT.** Branch `feat/delta-5-worm` already created off #4 and pushed.
-- **Branch stack:** `main` → #20 `feat/delta-3-cosign` → #21 `feat/delta-4-anchoring` → `feat/delta-5-worm`. Open Delta #5's PR with **base `feat/delta-4-anchoring`** so the diff is Delta #5 only. Merge order: #20, then #21, then #5's PR. Do not self-merge.
-- **Verification harness:** `docs/testing/E2E_ANTIGRAVITY_PROMPT.md` exercises the full stack (Parts cover Deltas #1–4); extend it per delta.
-- **Next action:** implement **Delta #5** (§5 above) on `feat/delta-5-worm`, strict TDD.
+  - **Delta #3** inline co-sign witness — ✅ merged (PR #20).
+  - **Delta #4** checkpoint + heartbeat — ✅ merged (PR #21).
+  - **Delta #5** WORM + envelope-encryption — ✅ merged (PR #22).
+  - **Delta #6** key-transparency registry — ✅ merged (PR #23).
+  - **Delta #7** degraded-mode discipline — ✅ merged (PR #24).
+- **Branch stack (historical):** `main` → #20 `feat/delta-3-cosign` (also absorbed #21–#24 as later PRs targeted it directly) → `feat/delta-5-worm` (#22) / `feat/delta-6-key-transparency` (#23) / `feat/delta-7-degraded-mode` (#24). `feat/delta-3-cosign` now contains the full backlog and is the integration branch pending a final merge to `main`.
+- **Verification harness:** `docs/testing/E2E_ANTIGRAVITY_PROMPT.md` exercises the full stack — Parts 1–3f cover Deltas #1–7, Part 4/4b covers the pre-existing + Delta #4 anchor pipeline. A combined live run (all 7 deltas on one stack) was exercised 2026-07-08: real transaction → witness co-sign → WORM DoD #1 → key-history bootstrap → forced degraded fallback → reconciliation, all hash-chains valid throughout.
+- **Next action:** none from this doc's backlog — all deltas implemented. Remaining work is operational: merge the integration branch to `main`, and the residual risks disclosed per-delta (see each PR) are the honest boundary of this MVP, not open implementation items.

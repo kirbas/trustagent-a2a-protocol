@@ -62,6 +62,14 @@ Live agent reasoning and protocol events are broadcast via **Server-Sent Events 
 
 ---
 
+## 🛡 Dispute-Pack Hardening (Deltas #1–7, complete)
+
+The accountability record now survives a **two-bank collusion against an external party** — not just outsider tampering. Durable custodied keys, an append-only hash-chain, an independent inline co-signing witness (`trust-agent-cloud`), on-chain checkpoint anchoring + heartbeat, an encrypted content-addressed WORM store, an append-only key-transparency registry, and bounded degraded-mode fallback for witness outages.
+
+- **[DISPUTE_HARDENING.md](DISPUTE_HARDENING.md)**: the threat model, resolved decisions, and residual risks — read this first.
+- **[execution_plan.md](execution_plan.md)**: what was built, in what order, and how to verify it (§7 has current status).
+- **[testing/E2E_ANTIGRAVITY_PROMPT.md](testing/E2E_ANTIGRAVITY_PROMPT.md)**: the full end-to-end verification script, Parts 1–4b.
+
 ## 📝 Documentation
 - **[ARCHITECTURE.md](ARCHITECTURE.md)**: Detailed system design and data flow.
 - **[AGENT_CONTEXT.md](AGENT_CONTEXT.md)**: Critical technical context for developers and AI agents.
