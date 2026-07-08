@@ -5,6 +5,7 @@ import { buildAcceptanceReceipt } from "./envelopes.js";
 import type { IntentEnvelope } from "./envelopes.js";
 import { ProxyAGateway } from "./trust-proxy.js";
 import type { McpToolCall } from "./trust-proxy.js";
+import { DegradedModeGate } from "./degraded-mode.js";
 
 const WITNESS_URL = "http://witness.test";
 const PROXY_B_URL = "http://proxy-b.test";
@@ -157,5 +158,66 @@ describe("ProxyAGateway witness finality gate", () => {
     expect(result.error).toBeUndefined();
     expect(executeTool).toHaveBeenCalledOnce();
     expect(result.result?._a2a?.cosign_receipt).toBeUndefined();
+  });
+});
+
+describe("ProxyAGateway degraded-mode fallback (Delta #7)", () => {
+  it("completes with a degraded_record when the witness is unreachable and the gate allows it", async () => {
+    const proxyAKey = await generateKeyPair("did:workload:bank-a-proxy#key-1");
+    const proxyBKey = await generateKeyPair("did:workload:bank-b-proxy#key-1");
+
+    installFetch(proxyBKey, async () => {
+      throw new Error("ECONNREFUSED");
+    });
+
+    const gateway = new ProxyAGateway({
+      proxyKey: proxyAKey,
+      proxyBEndpoint: PROXY_B_URL,
+      witnessEndpoint: WITNESS_URL,
+      degradedMode: new DegradedModeGate({
+        maxValueUsd: 1000,
+        maxDegradedPerWindow: 5,
+        windowSeconds: 60,
+        reconciliationSeconds: 300,
+      }),
+    });
+
+    const executeTool = vi.fn(async () => ({ ok: true }));
+    const result = await gateway.forwardToolCall(makeCall(), executeTool);
+
+    expect(result.error).toBeUndefined();
+    expect(executeTool).toHaveBeenCalledOnce();
+    expect(result.result?._a2a?.cosign_receipt).toBeUndefined();
+    expect(result.result?._a2a?.degraded_record).toMatchObject({ reason: expect.stringContaining("unreachable") });
+    expect(result.result?._a2a?.degraded_record?.reconcile_by).toBeDefined();
+  });
+
+  it("still hard-fails when the degraded-mode gate refuses (e.g. value cap)", async () => {
+    const proxyAKey = await generateKeyPair("did:workload:bank-a-proxy#key-1");
+    const proxyBKey = await generateKeyPair("did:workload:bank-b-proxy#key-1");
+
+    installFetch(proxyBKey, async () => {
+      throw new Error("ECONNREFUSED");
+    });
+
+    const gateway = new ProxyAGateway({
+      proxyKey: proxyAKey,
+      proxyBEndpoint: PROXY_B_URL,
+      witnessEndpoint: WITNESS_URL,
+      degradedMode: new DegradedModeGate({
+        maxValueUsd: 0, // any positive-cost call is capped out
+        maxDegradedPerWindow: 5,
+        windowSeconds: 60,
+        reconciliationSeconds: 300,
+      }),
+    });
+
+    const call = makeCall();
+    call.params._estimated_cost_usd = 100;
+    const executeTool = vi.fn(async () => ({ ok: true }));
+    const result = await gateway.forwardToolCall(call, executeTool);
+
+    expect(result.error).toBeDefined();
+    expect(executeTool).not.toHaveBeenCalled();
   });
 });

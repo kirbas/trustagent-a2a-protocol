@@ -318,6 +318,39 @@ An independent service, **`trust-agent-cloud`** (port 3003), co-signs each trans
 4. **Revocation-as-append.** Build `{did, revoke_kid, timestamp}` signed by the *currently active* key (same pattern as step 2, target `/revoke-peer-key` or `/revoke-key` with `{kid, endorsement, timestamp}`), then re-check `/key-history/:kid` — the active epoch's `validUntil` is now set, but the row is still present (not deleted), and the revoked key's own past signatures remain independently verifiable (only *new* registrations for that DID are now blocked without it).
 
 **Note:** rotating Bank-A's live signing key mid-run means subsequent `/invoke` calls sign with the *old* key unless the proxy process itself is restarted with a new keystore — this section proves the **registry's** append-only/endorsement mechanics, not an operational "rotate now" flow (that wiring is intentionally out of scope for this delta; see the PR's residual-risk note).
+## Part 3f — Degraded-mode discipline (Delta #7)
+
+Today the witness is a hard finality gate: if `/co-sign` fails, the transaction is rejected outright (`ERR_WITNESS_UNAVAILABLE`). Delta #7 adds a bounded fallback: when `DEGRADED_MODE_ENABLED=true`, a witness failure may instead produce a **capped, tracked** degraded record instead of hard-failing — never a forged witness signature.
+
+1. **Default (disabled) behavior is unchanged — regression check.** With `DEGRADED_MODE_ENABLED` unset/`false` (the default), repeat Part 3c step 4 (stop the witness, drive a transaction): it must still hard-fail exactly as before. Restart the witness afterward.
+
+2. **Enable degraded mode and force a witness outage:**
+   ```bash
+   docker compose stop trust-agent-cloud
+   curl -s -X POST http://localhost:3001/invoke -H 'content-type: application/json' \
+     -d '{"tool":"security_posture_report","args":{"probe":"delta7"},"cost":50}' | python3 -m json.tool
+   ```
+   (Requires `DEGRADED_MODE_ENABLED=true` and `DEGRADED_MAX_VALUE_USD` ≥ 50 in `.env`, stack rebuilt — `docker compose up -d --build bank-a-proxy`.)
+   **PASS criterion:** the response is a normal `result` (not an `error`), `_a2a.cosign_receipt` is absent, and `_a2a.degraded_record` is present with `reason` mentioning "unreachable" and a `reconcile_by` timestamp in the future.
+
+3. **Value cap rejection.** Repeat step 2 with `"cost"` above `DEGRADED_MAX_VALUE_USD` — expect a normal MCP `error` response (hard-fail), same as the fully-disabled case: the cap, not the mere presence of `degradedMode`, is what's load-bearing.
+
+4. **Persisted + queryable.** Restart the witness, then:
+   ```bash
+   curl -s "http://localhost:3001/degraded-status/<TRACE_ID_FROM_STEP_2>" | python3 -m json.tool
+   ```
+   **PASS criterion:** `status: "PENDING"` (if within the reconciliation window) with the same `reconcile_by`/`reason` as the original response — the DEGRADED row survived as its own envelope-chain entry, not just transient response JSON.
+
+5. **Reconciliation.** With the witness back up:
+   ```bash
+   curl -s -X POST "http://localhost:3001/reconcile/<TRACE_ID_FROM_STEP_2>" | python3 -m json.tool
+   curl -s "http://localhost:3001/degraded-status/<TRACE_ID_FROM_STEP_2>" | python3 -m json.tool
+   ```
+   **PASS criterion:** the reconcile call returns a real `cosign_receipt`; the status call now reads `"RECONCILED"` — a `COSIGN` row now exists for that trace (check `GET /envelopes`), turning a degraded record into a fully-witnessed one after the fact.
+
+6. **Expiry (deterministic, no live wait needed):** `cd trust-agent && npx vitest run src/degraded-mode.test.ts` covers `reconciliationStatus` returning `EXPIRED_UNRECONCILED` once `reconcile_by` passes with no co-sign — the auto-flag-invalid half of the reconciliation window, without waiting out a real deadline live.
+
+**Note:** the rate cap (`DEGRADED_MAX_PER_WINDOW`) and the value cap are exercised together in `trust-proxy.test.ts`/`degraded-mode.test.ts`; reproducing the rate cap live would mean forcing `DEGRADED_MAX_PER_WINDOW + 1` witness outages in one `DEGRADED_WINDOW_SECONDS` window, which isn't worth the wall-clock cost here — the deterministic test is the evidence for that path.
 
 ## Part 4 — Force the on-chain anchor and verify it for real
 
@@ -399,5 +432,6 @@ Produce a single markdown report with:
 8. **Checkpoint & heartbeat (Delta #4)** — HEAD checkpoint anchored (tx on-chain, data = commitment), idempotent no-op on unchanged head, gapless `checkpoints`; heartbeats chain + increment with confirmed txs.
 9. **WORM content store (Delta #5)** — content-address == envelope commitment (DoD #1), only ciphertext + wrapped-DEKs ever at rest, cross-held on Bank-A + witness, write-once rejection of a differing PUT under an existing hash (with idempotent accept of the identical one), escrow unit test result, and confirmation the witness's own env never holds the escrow key.
 10. **Key-transparency registry (Delta #6)** — bootstrap registrations intact, an endorsed rotation accepted and visible in `/key-history` with the old epoch closed (`validUntil` set) and the new one open, an unendorsed/badly-endorsed rotation rejected (`400`), and revocation-as-append (epoch closed, not deleted).
-11. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates Delta #1 (key custody), Delta #2 (hash-chain), Delta #3 (inline co-sign witness + finality gate), Delta #4 (chain HEAD checkpoint + on-chain heartbeat), Delta #5 (WORM content store + envelope-encryption), Delta #6 (append-only key-transparency registry), plus the pre-existing anchor pipeline; it does **not** exercise Delta #7 (degraded-mode discipline) since it isn't implemented yet — say so plainly rather than implying broader coverage than what ran. Residual (by design, DISPUTE_HARDENING §5.3): "TrustAgentAI + one bank colluding" is **not** closed. Delta #4 narrows §5.2 (a heartbeat gap now makes anchor/witness downtime publicly provable) but full degraded-mode discipline (reconciliation window + value cap) is Delta #7. Delta #5's holder-KEK model is still a pre-shared symmetric secret (same simplification as every other KEK in this repo) — Bank-A, as plaintext origin, ends up holding the witness's and client's content-KEK values too in order to wrap their DEK copies; note this as a residual, not a regression, since no confidentiality is lost versus the pre-Delta-5 baseline (Bank-A always had the plaintext). Delta #6 closes "whose key" repudiation for rotations but recovering a DID whose only key is lost/revoked (no prior key available to endorse a replacement) is an explicit, out-of-scope bootstrap problem — flag it if a reviewer asks about it, don't treat it as a bug.
-12. Any CRITICAL findings called out at the very top, before the section-by-section detail.
+11. **Degraded-mode discipline (Delta #7)** — disabled-by-default behavior unchanged (regression), an allowed degraded fallback producing a `degraded_record` (no forged witness signature), value-cap rejection, persisted + queryable via `/degraded-status`, and reconciliation turning it into a real `COSIGN` via `/reconcile`.
+12. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates the full delta backlog: Delta #1 (key custody), Delta #2 (hash-chain), Delta #3 (inline co-sign witness + finality gate), Delta #4 (chain HEAD checkpoint + on-chain heartbeat), Delta #5 (WORM content store + envelope-encryption), Delta #6 (append-only key-transparency registry), Delta #7 (degraded-mode discipline), plus the pre-existing anchor pipeline. Residual (by design, DISPUTE_HARDENING §5.3): "TrustAgentAI + one bank colluding" is **not** closed by any of this — Delta #4 narrows §5.2 (a heartbeat gap makes anchor/witness downtime publicly provable) and Delta #7 narrows it further (an outage no longer force-fails everything, only unbounded-value transactions), but a colluding witness+bank pair remains outside scope. Delta #5's holder-KEK model is a pre-shared symmetric secret (same simplification as every other KEK in this repo) — Bank-A, as plaintext origin, ends up holding the witness's and client's content-KEK values too; no confidentiality loss vs. the pre-Delta-5 baseline. Delta #6 closes "whose key" repudiation for rotations but recovering a DID whose only key is lost/revoked (no prior key to endorse a replacement) is an explicit, out-of-scope bootstrap problem. Delta #7's degraded records are unsigned by design — their tamper-evidence comes from the envelope hash-chain, not an independent signature; a colluding Bank-A could fabricate a plausible-looking outage, bounded only by the value/rate caps.
+13. Any CRITICAL findings called out at the very top, before the section-by-section detail.
