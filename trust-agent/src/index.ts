@@ -12,3 +12,4 @@ export * from "./trust-proxy.js";
 export * from "./worm.js";
 export * from "./worm-store.js";
 export * from "./key-registry.js";
+export * from "./degraded-mode.js";
