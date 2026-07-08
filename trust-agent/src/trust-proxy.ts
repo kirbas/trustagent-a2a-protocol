@@ -241,9 +241,15 @@ export class ProxyAGateway {
 
 // ─── Proxy B (Executor Side) ──────────────────────────────────────────────────
 
+/** Anything that resolves a kid to its public key — a plain `Map` or a
+ *  `KeyRegistry` (Delta #6) both satisfy this. */
+export interface PublicKeySource {
+  get(kid: string): Uint8Array | undefined;
+}
+
 export interface ProxyBConfig {
   proxyKey: KeyPair;
-  proxyAPublicKeys: Map<string, Uint8Array>; // kid → publicKey
+  proxyAPublicKeys: PublicKeySource; // kid → publicKey
   nonceRegistry: NonceRegistry;
   budgetEngine: RiskBudgetEngine;
   ledger: DAGLedger;
