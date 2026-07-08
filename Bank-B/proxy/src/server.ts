@@ -7,9 +7,13 @@ import {
   DAGLedger,
   NonceRegistry,
   RiskBudgetEngine,
+  KeyRegistry,
+  didFromKid,
+  type PublicKeySource,
   type IntentEnvelope,
   type ExecutionEnvelope,
   type KeyPair,
+  type SignatureBlock,
   signEnvelope,
 } from "@trustagentai/a2a-core";
 import { 
@@ -63,7 +67,7 @@ let nonceRegistry: NonceRegistry;
 let budgetEngine: RiskBudgetEngine;
 let proxyB: ProxyBGateway;
 
-function initProxyB(proxyBKey: KeyPair, proxyAPublicKeys: Map<string, Uint8Array>) {
+function initProxyB(proxyBKey: KeyPair, proxyAPublicKeys: PublicKeySource) {
   ledger = new DAGLedger();
   nonceRegistry = new NonceRegistry();
   budgetEngine = new RiskBudgetEngine();
@@ -94,7 +98,7 @@ async function main(): Promise<void> {
   initDb(DB_PATH);
   const sseBus = new SseBus();
 
-  const proxyAPublicKeys = new Map<string, Uint8Array>();
+  const proxyAPublicKeys = new KeyRegistry();
   initProxyB(proxyKey, proxyAPublicKeys);
 
   // Delta #3: register our key with the independent witness so it can verify
@@ -155,11 +159,63 @@ async function main(): Promise<void> {
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
-  app.post("/register-peer-key", (req, res) => {
-    const { kid, publicKeyHex } = req.body as { kid: string; publicKeyHex: string };
-    proxyAPublicKeys.set(kid, Buffer.from(publicKeyHex, "hex"));
-    console.log(`[bank-b-proxy] registered peer key: ${kid}`);
-    res.json({ ok: true });
+  app.post("/register-peer-key", async (req, res) => {
+    const { kid, publicKeyHex, endorsement, timestamp } = req.body as {
+      kid?: string;
+      publicKeyHex?: string;
+      endorsement?: SignatureBlock;
+      /** Required alongside `endorsement` — the exact timestamp the caller
+       *  signed into the rotation attestation. */
+      timestamp?: string;
+    };
+    if (!kid || !publicKeyHex) {
+      res.status(400).json({ error: "kid and publicKeyHex are required" });
+      return;
+    }
+    if (endorsement && !timestamp) {
+      res.status(400).json({ error: "timestamp is required alongside endorsement" });
+      return;
+    }
+    try {
+      await proxyAPublicKeys.register(didFromKid(kid), kid, publicKeyHex, timestamp ?? new Date().toISOString(), endorsement);
+      console.log(`[bank-b-proxy] registered peer key: ${kid}`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.warn(`[bank-b-proxy] key registration refused for ${kid}`, err);
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  // Delta #6: revoke the currently active key for a DID (any of its kids),
+  // and read back its full epoch history (the transparency log).
+  app.post("/revoke-peer-key", async (req, res) => {
+    const { kid, endorsement, timestamp } = req.body as {
+      kid?: string;
+      endorsement?: SignatureBlock;
+      timestamp?: string;
+    };
+    if (!kid || !endorsement || !timestamp) {
+      res.status(400).json({ error: "kid, endorsement, and timestamp are required" });
+      return;
+    }
+    try {
+      await proxyAPublicKeys.revoke(didFromKid(kid), timestamp, endorsement);
+      console.log(`[bank-b-proxy] revoked key: ${kid}`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.warn(`[bank-b-proxy] key revocation refused for ${kid}`, err);
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.get("/key-history/:kid", (req, res) => {
+    const history = proxyAPublicKeys.getHistory(didFromKid(req.params.kid)).map((e) => ({
+      kid: e.kid,
+      publicKeyHex: Buffer.from(e.publicKey).toString("hex"),
+      validFrom: e.validFrom,
+      validUntil: e.validUntil,
+    }));
+    res.json(history);
   });
 
   app.post("/reset", (_req, res) => {

@@ -271,6 +271,54 @@ An independent service, **`trust-agent-cloud`** (port 3003), co-signs each trans
    curl -s http://localhost:3003/verify-chain | python3 -m json.tool   # still {"valid": true}
    ```
 
+## Part 3e — Key-transparency registry (Delta #6)
+
+`register-peer-key` (Bank-B) and `register-key` (witness) are no longer "last write wins": both are now backed by an append-only `KeyRegistry`. A DID's first registration is trust-on-first-use; any later one is a **rotation** and must be **endorsed** — signed by the DID's prior key. Revocation closes a key's validity window without deleting its history.
+
+1. **Bootstrap is unaffected (regression check).** The stack already registered both proxies' boot-time keys with each other and the witness in Startup — confirm those first-registrations still show up:
+   ```bash
+   curl -s http://localhost:3002/key-history/did:workload:bank-a-proxy#key-1 | python3 -m json.tool
+   curl -s http://localhost:3003/key-history/did:workload:bank-a-proxy#key-1 | python3 -m json.tool
+   ```
+   **PASS criterion:** one epoch each, `validUntil: null` (still active).
+
+2. **Endorsed rotation, live.** Generate a second Ed25519 keypair for Bank-A's DID and an endorsement signed by its *current* key — easiest via a short Node one-liner using the already-built package:
+   ```bash
+   docker compose exec bank-a-proxy node -e "
+   const { generateKeyPair, buildRotationAttestation, signRotation, loadOrCreateKeyPair } = require('@trustagentai/a2a-core');
+   (async () => {
+     const oldKey = await loadOrCreateKeyPair('did:workload:bank-a-proxy#key-1', '/data/bank-a-keystore.json', process.env.KEYSTORE_KEK);
+     const newKey = await generateKeyPair('did:workload:bank-a-proxy#key-2');
+     const newPubHex = Buffer.from(newKey.publicKey).toString('hex');
+     const ts = new Date().toISOString();
+     const attestation = buildRotationAttestation('did:workload:bank-a-proxy', newKey.kid, newPubHex, ts);
+     const endorsement = await signRotation(attestation, oldKey);
+     console.log(JSON.stringify({ kid: newKey.kid, publicKeyHex: newPubHex, timestamp: ts, endorsement }));
+   })();
+   "
+   ```
+   POST the printed JSON to both registries:
+   ```bash
+   curl -s -X POST http://localhost:3002/register-peer-key -H 'content-type: application/json' -d '<PRINTED_JSON>'
+   curl -s -X POST http://localhost:3003/register-key -H 'content-type: application/json' -d '<PRINTED_JSON>'
+   ```
+   **PASS criterion:** both `{"ok":true}`. Then:
+   ```bash
+   curl -s http://localhost:3002/key-history/did:workload:bank-a-proxy#key-1 | python3 -m json.tool
+   ```
+   The `#key-1` epoch now has a non-null `validUntil`; a `GET .../key-history/did:workload:bank-a-proxy#key-2` shows the new epoch with `validUntil: null`. History is additive — nothing was deleted or overwritten.
+
+3. **Unendorsed / badly-endorsed rotation is rejected.** Repeat step 2's POST but omit `endorsement`, or reuse a stale/mismatched one:
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3002/register-peer-key \
+     -H 'content-type: application/json' -d '{"kid":"did:workload:bank-a-proxy#key-3","publicKeyHex":"00"}'
+   ```
+   **PASS criterion:** `400` — a DID with an existing key cannot be silently overwritten. (Deterministic equivalent, no live stack needed: `cd trust-agent && npx vitest run src/key-registry.test.ts` — covers unendorsed, wrong-key-endorsed, and duplicate-kid-different-key rejection explicitly.)
+
+4. **Revocation-as-append.** Build `{did, revoke_kid, timestamp}` signed by the *currently active* key (same pattern as step 2, target `/revoke-peer-key` or `/revoke-key` with `{kid, endorsement, timestamp}`), then re-check `/key-history/:kid` — the active epoch's `validUntil` is now set, but the row is still present (not deleted), and the revoked key's own past signatures remain independently verifiable (only *new* registrations for that DID are now blocked without it).
+
+**Note:** rotating Bank-A's live signing key mid-run means subsequent `/invoke` calls sign with the *old* key unless the proxy process itself is restarted with a new keystore — this section proves the **registry's** append-only/endorsement mechanics, not an operational "rotate now" flow (that wiring is intentionally out of scope for this delta; see the PR's residual-risk note).
+
 ## Part 4 — Force the on-chain anchor and verify it for real
 
 1. Trigger an immediate anchor of whatever's pending (don't wait for the auto-batch threshold):
@@ -350,5 +398,6 @@ Produce a single markdown report with:
 7. **Witness co-sign (Delta #3)** — `COSIGN` present for the trace, witness `/verify-chain` valid + gapless `cosigns` rows, witness key durable across restart with no leaked private material, and the finality-gate result (transaction rejected while the witness was down).
 8. **Checkpoint & heartbeat (Delta #4)** — HEAD checkpoint anchored (tx on-chain, data = commitment), idempotent no-op on unchanged head, gapless `checkpoints`; heartbeats chain + increment with confirmed txs.
 9. **WORM content store (Delta #5)** — content-address == envelope commitment (DoD #1), only ciphertext + wrapped-DEKs ever at rest, cross-held on Bank-A + witness, write-once rejection of a differing PUT under an existing hash (with idempotent accept of the identical one), escrow unit test result, and confirmation the witness's own env never holds the escrow key.
-10. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates Delta #1 (key custody), Delta #2 (hash-chain), Delta #3 (inline co-sign witness + finality gate), Delta #4 (chain HEAD checkpoint + on-chain heartbeat), Delta #5 (WORM content store + envelope-encryption), plus the pre-existing anchor pipeline; it does **not** exercise Deltas #6–7 (key-transparency registry, degraded-mode discipline) since those aren't implemented yet — say so plainly rather than implying broader coverage than what ran. Residual (by design, DISPUTE_HARDENING §5.3): "TrustAgentAI + one bank colluding" is **not** closed. Delta #4 narrows §5.2 (a heartbeat gap now makes anchor/witness downtime publicly provable) but full degraded-mode discipline (reconciliation window + value cap) is Delta #7. Delta #5's holder-KEK model is still a pre-shared symmetric secret (same simplification as every other KEK in this repo) — Bank-A, as plaintext origin, ends up holding the witness's and client's content-KEK values too in order to wrap their DEK copies; note this as a residual, not a regression, since no confidentiality is lost versus the pre-Delta-5 baseline (Bank-A always had the plaintext).
-11. Any CRITICAL findings called out at the very top, before the section-by-section detail.
+10. **Key-transparency registry (Delta #6)** — bootstrap registrations intact, an endorsed rotation accepted and visible in `/key-history` with the old epoch closed (`validUntil` set) and the new one open, an unendorsed/badly-endorsed rotation rejected (`400`), and revocation-as-append (epoch closed, not deleted).
+11. **Overall verdict** — PASS/FAIL per section, and an explicit note that this run validates Delta #1 (key custody), Delta #2 (hash-chain), Delta #3 (inline co-sign witness + finality gate), Delta #4 (chain HEAD checkpoint + on-chain heartbeat), Delta #5 (WORM content store + envelope-encryption), Delta #6 (append-only key-transparency registry), plus the pre-existing anchor pipeline; it does **not** exercise Delta #7 (degraded-mode discipline) since it isn't implemented yet — say so plainly rather than implying broader coverage than what ran. Residual (by design, DISPUTE_HARDENING §5.3): "TrustAgentAI + one bank colluding" is **not** closed. Delta #4 narrows §5.2 (a heartbeat gap now makes anchor/witness downtime publicly provable) but full degraded-mode discipline (reconciliation window + value cap) is Delta #7. Delta #5's holder-KEK model is still a pre-shared symmetric secret (same simplification as every other KEK in this repo) — Bank-A, as plaintext origin, ends up holding the witness's and client's content-KEK values too in order to wrap their DEK copies; note this as a residual, not a regression, since no confidentiality is lost versus the pre-Delta-5 baseline (Bank-A always had the plaintext). Delta #6 closes "whose key" repudiation for rotations but recovering a DID whose only key is lost/revoked (no prior key available to endorse a replacement) is an explicit, out-of-scope bootstrap problem — flag it if a reviewer asks about it, don't treat it as a bug.
+12. Any CRITICAL findings called out at the very top, before the section-by-section detail.
