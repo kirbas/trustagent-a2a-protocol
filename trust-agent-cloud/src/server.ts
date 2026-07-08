@@ -15,7 +15,7 @@
 import express from "express";
 import cors from "cors";
 import { loadOrCreateKeyPair } from "@trustagentai/a2a-core";
-import type { IntentEnvelope, AcceptanceReceipt } from "@trustagentai/a2a-core";
+import type { IntentEnvelope, AcceptanceReceipt, SignatureBlock } from "@trustagentai/a2a-core";
 import { initDb, verifyCoSignChain, clearCoSigns } from "./db.js";
 import { CoSignService } from "./witness.js";
 import { initBlobDb, putBlob, getBlob, clearBlobs, type BlobInput } from "./blob-db.js";
@@ -47,15 +47,64 @@ async function main(): Promise<void> {
     res.json({ ok: true, witness_kid: witnessKey.kid })
   );
 
-  app.post("/register-key", (req, res) => {
-    const { kid, publicKeyHex } = req.body as { kid?: string; publicKeyHex?: string };
+  app.post("/register-key", async (req, res) => {
+    const { kid, publicKeyHex, endorsement, timestamp } = req.body as {
+      kid?: string;
+      publicKeyHex?: string;
+      endorsement?: SignatureBlock;
+      /** Required alongside `endorsement` — must be the exact timestamp the
+       *  caller signed into the rotation attestation (verification hashes
+       *  the attestation object, so a server-generated one would never match). */
+      timestamp?: string;
+    };
     if (!kid || !publicKeyHex) {
       res.status(400).json({ error: "kid and publicKeyHex are required" });
       return;
     }
-    service.registerKey(kid, publicKeyHex);
-    console.log(`[trust-agent-cloud] registered peer key: ${kid}`);
-    res.json({ ok: true });
+    if (endorsement && !timestamp) {
+      res.status(400).json({ error: "timestamp is required alongside endorsement" });
+      return;
+    }
+    try {
+      await service.registerKey(kid, publicKeyHex, endorsement, timestamp);
+      console.log(`[trust-agent-cloud] registered peer key: ${kid}`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.warn(`[trust-agent-cloud] key registration refused for ${kid}`, err);
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  // Delta #6: revoke the currently active key for a DID (any of its kids),
+  // and read back its full epoch history (the transparency log).
+  app.post("/revoke-key", async (req, res) => {
+    const { kid, endorsement, timestamp } = req.body as {
+      kid?: string;
+      endorsement?: SignatureBlock;
+      timestamp?: string;
+    };
+    if (!kid || !endorsement || !timestamp) {
+      res.status(400).json({ error: "kid, endorsement, and timestamp are required" });
+      return;
+    }
+    try {
+      await service.revokeKey(kid, endorsement, timestamp);
+      console.log(`[trust-agent-cloud] revoked key: ${kid}`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.warn(`[trust-agent-cloud] key revocation refused for ${kid}`, err);
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.get("/key-history/:kid", (req, res) => {
+    const history = service.getKeyHistory(req.params.kid).map((e) => ({
+      kid: e.kid,
+      publicKeyHex: Buffer.from(e.publicKey).toString("hex"),
+      validFrom: e.validFrom,
+      validUntil: e.validUntil,
+    }));
+    res.json(history);
   });
 
   app.post("/co-sign", async (req, res) => {
