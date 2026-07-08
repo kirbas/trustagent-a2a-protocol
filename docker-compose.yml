@@ -31,6 +31,12 @@ services:
       RPC_URL: "${RPC_URL}"
       PRIVATE_KEY: "${PRIVATE_KEY}"
       DB_PATH: "/data/bank-b.db"
+      # Delta #4: chain HEAD checkpoints + on-chain heartbeat. The heartbeat
+      # publisher is opt-in (it continuously spends burner-wallet gas); the
+      # /checkpoint and /heartbeat endpoints work regardless.
+      CHECKPOINT_PARTY: "bank-b"
+      HEARTBEAT_ENABLED: "${HEARTBEAT_ENABLED:-false}"
+      HEARTBEAT_INTERVAL_SECONDS: "${HEARTBEAT_INTERVAL_SECONDS:-60}"
       PYTHONUNBUFFERED: "1"
     volumes:
       - bank-b-data:/data
@@ -75,6 +81,20 @@ services:
       DB_PATH: "/data/bank-a.db"
       KEYSTORE_PATH: "/data/bank-a-keystore.json"
       KEYSTORE_KEK: "${BANK_A_KEYSTORE_KEK}"
+      # Delta #5: WORM content store — per-holder envelope-encryption KEKs.
+      # All four must be set for Bank-A to actually store/cross-push content;
+      # if any is missing the proxy logs a warning and skips WORM storage
+      # (existing envelope/hash-chain/witness behavior is unaffected).
+      BANK_A_CONTENT_KEK: "${BANK_A_CONTENT_KEK}"
+      CLIENT_CONTENT_KEK: "${CLIENT_CONTENT_KEK}"
+      TRUSTAGENT_CONTENT_KEK: "${TRUSTAGENT_CONTENT_KEK}"
+      REGULATOR_ESCROW_KEK: "${REGULATOR_ESCROW_KEK}"
+      # Delta #7: degraded-mode fallback, disabled unless explicitly enabled.
+      DEGRADED_MODE_ENABLED: "${DEGRADED_MODE_ENABLED:-false}"
+      DEGRADED_MAX_VALUE_USD: "${DEGRADED_MAX_VALUE_USD:-1000}"
+      DEGRADED_MAX_PER_WINDOW: "${DEGRADED_MAX_PER_WINDOW:-3}"
+      DEGRADED_WINDOW_SECONDS: "${DEGRADED_WINDOW_SECONDS:-3600}"
+      DEGRADED_RECONCILIATION_SECONDS: "${DEGRADED_RECONCILIATION_SECONDS:-900}"
     volumes:
       - bank-a-data:/data
     depends_on:

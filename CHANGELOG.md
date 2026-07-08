@@ -1,5 +1,26 @@
 # Changelog - ikarin-develop Branch
 
+## [Dispute-Pack Hardening — Deltas #1–7 complete] - 2026-07-08
+
+Full implementation of `docs/execution_plan.md` / `docs/DISPUTE_HARDENING.md`: the record now survives a two-bank collusion against an external party, closing self-fabrication, deletion/suppression, content unavailability, key repudiation, and unbounded witness-outage risk. See those two docs for the full threat model and design rationale.
+
+### 🔒 Security / Accountability
+- **Delta #1 — Durable, custodied keys**: proxies and the witness load a persistent Ed25519 identity from an AES-256-GCM-encrypted keystore (`loadOrCreateKeyPair`) instead of minting a fresh key every boot; KEK isolated from the DB.
+- **Delta #2 — Append-only hash-chain**: every envelope row carries `seq` + `prev_hash` (`hash-chain.ts`); a dropped row leaves a provable gap, an edited row breaks its successor's link. `GET /verify-chain` on both proxies and the witness.
+- **Delta #3 — Independent inline co-sign witness**: new `trust-agent-cloud` service co-signs every transaction between Acceptance and Execution; a transaction without a valid witness signature does not finalize (the finality gate).
+- **Delta #4 — Checkpoint anchoring + heartbeat**: each party's chain HEAD is anchored to Base Sepolia as a checkpoint commitment; an opt-in periodic on-chain heartbeat makes anchor/witness downtime publicly provable.
+- **Delta #5 — WORM content store + envelope-encryption**: `args`/`outputData` (previously hashed-only, never stored) are now persisted as encrypted, content-addressed blobs (`worm.ts`, `worm-store.ts`) — content address = `sha256(plaintext)` = the commitment already in the envelope. Per-tx DEK wrapped per holder (bank, client, witness) plus a separate regulator escrow entry the witness cannot unwrap. Cross-held on Bank-A + the witness via `PUT/GET /blob/:contentHash`.
+- **Delta #6 — Key-transparency registry**: `register-peer-key`/`register-key` are no longer "last write wins" — `KeyRegistry` requires every rotation to be endorsed by the DID's prior key; revocation closes a validity window without deleting history. New `/revoke-key(-peer-key)` and `GET /key-history/:kid`.
+- **Delta #7 — Degraded-mode discipline**: a witness outage no longer hard-fails every transaction. `DegradedModeGate` bounds the fallback with a value cap and a rolling-window rate cap; a degraded transaction is persisted as its own honestly-marked record (never a forged witness signature) with a reconciliation deadline. New `POST /reconcile/:traceId` and `GET /degraded-status/:traceId`.
+
+### 📦 Versions
+- `@trustagentai/a2a-core` 0.5.0-alpha.0 → **0.6.0**
+- `@trustagentai/trust-agent-cloud`, Bank-A proxy, Bank-B proxy 1.0.0 → **1.1.0**
+
+### 📝 Documentation
+- `docs/execution_plan.md` §7 handoff status updated — all 7 deltas done.
+- `docs/testing/E2E_ANTIGRAVITY_PROMPT.md` extended with Parts 3b–3f covering Deltas #2–7.
+
 ## [Core Library Audit & D1 Security Fix] - 2026-05-19
 
 ### 🔒 Security

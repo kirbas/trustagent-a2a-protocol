@@ -5,9 +5,15 @@ import {
   loadOrCreateKeyPair,
   ProxyAGateway,
   buildContentProvenanceReceipt,
+  buildWormRecord,
+  canonicalBytes,
   sha256Json,
   computeEnvelopeHash,
+  DegradedModeGate,
+  reconciliationStatus,
   type McpToolCall,
+  type Holder,
+  type DegradedRecord,
 } from "@trustagentai/a2a-core";
 import {
   initDb,
@@ -20,6 +26,7 @@ import {
   getThoughts,
   verifyEnvelopeChain,
 } from "./db.js";
+import { initWormDb, putContentBlob } from "./worm-db.js";
 import { SseBus } from "./sse.js";
 import { registerWithProxyB, registerWithWitness } from "./key-exchange.js";
 
@@ -31,8 +38,36 @@ const KEYSTORE_PATH = process.env.KEYSTORE_PATH ?? "/data/bank-a-keystore.json";
 const KEYSTORE_KEK = process.env.KEYSTORE_KEK;
 const INITIATOR_DID = "did:workload:bank-a-agent";
 const PROXY_KID = "did:workload:bank-a-proxy#key-1";
+const WORM_DB_PATH = process.env.WORM_DB_PATH ?? DB_PATH;
+
+/**
+ * Delta #7: degraded-mode fallback config (Decision #8/#9). Disabled by
+ * default — a witness outage hard-fails, matching pre-Delta-7 behavior.
+ * Opt in with DEGRADED_MODE_ENABLED=true.
+ */
+const DEGRADED_MODE_ENABLED = process.env.DEGRADED_MODE_ENABLED === "true";
+const DEGRADED_MAX_VALUE_USD = Number(process.env.DEGRADED_MAX_VALUE_USD ?? 1000);
+const DEGRADED_MAX_PER_WINDOW = Number(process.env.DEGRADED_MAX_PER_WINDOW ?? 3);
+const DEGRADED_WINDOW_SECONDS = Number(process.env.DEGRADED_WINDOW_SECONDS ?? 3600);
+const DEGRADED_RECONCILIATION_SECONDS = Number(process.env.DEGRADED_RECONCILIATION_SECONDS ?? 900);
+const DEGRADED_NO_SIGNATURE = "none — degraded record, no witness signature available";
 
 let triggered = false;
+
+/**
+ * Delta #5: content-encryption KEKs, one per WORM holder. Distinct from the
+ * identity KEYSTORE_KEK above — these wrap per-transaction DEKs, not signing
+ * keys. Optional: if any is missing the WORM store is disabled for this run
+ * (existing happy-path keeps working; see docs/execution_plan.md §5).
+ */
+function parseContentKek(envVar: string): Buffer | undefined {
+  const value = process.env[envVar];
+  if (!value) return undefined;
+  if (!/^[0-9a-fA-F]{64}$/.test(value)) {
+    throw new Error(`${envVar} must be 64 hex characters (32 bytes)`);
+  }
+  return Buffer.from(value, "hex");
+}
 
 async function main(): Promise<void> {
   if (!KEYSTORE_KEK) {
@@ -52,12 +87,70 @@ async function main(): Promise<void> {
   }
 
   initDb(DB_PATH);
+  initWormDb(WORM_DB_PATH);
   const sseBus = new SseBus();
+
+  // Delta #5: WORM content store holders. Bank-A is the plaintext origin, so
+  // it builds the encrypted record and wraps the DEK for every cross-held
+  // party plus a regulator escrow entry that TrustAgentAI cannot unwrap
+  // (DISPUTE_HARDENING §5.4).
+  const bankAKek = parseContentKek("BANK_A_CONTENT_KEK");
+  const clientKek = parseContentKek("CLIENT_CONTENT_KEK");
+  const witnessContentKek = parseContentKek("TRUSTAGENT_CONTENT_KEK");
+  const regulatorKek = parseContentKek("REGULATOR_ESCROW_KEK");
+  const wormHolders: Holder[] | undefined =
+    bankAKek && clientKek && witnessContentKek
+      ? [
+          { id: "bank-a", kek: bankAKek },
+          { id: "client", kek: clientKek },
+          { id: "witness", kek: witnessContentKek },
+        ]
+      : undefined;
+  const wormEscrow: Holder | undefined = regulatorKek ? { id: "regulator", kek: regulatorKek } : undefined;
+  if (!wormHolders || !wormEscrow) {
+    console.warn("[worm] content-KEK env vars not fully configured — WORM content store disabled");
+  }
+
+  async function storeWormContent(value: unknown): Promise<void> {
+    if (!wormHolders || !wormEscrow) return;
+    try {
+      const plaintext = canonicalBytes(value);
+      const record = buildWormRecord(plaintext, wormHolders, wormEscrow);
+      putContentBlob(record.contentHash, record);
+      if (TRUSTAGENT_URL) {
+        await fetch(`${TRUSTAGENT_URL}/blob/${record.contentHash}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ciphertext: record.ciphertext,
+            iv: record.iv,
+            tag: record.tag,
+            wrappedDeks: record.wrappedDeks,
+          }),
+        });
+      }
+    } catch (e) {
+      console.warn("[worm] failed to store/cross-push content blob", e);
+    }
+  }
+
+  const degradedModeGate = DEGRADED_MODE_ENABLED
+    ? new DegradedModeGate({
+        maxValueUsd: DEGRADED_MAX_VALUE_USD,
+        maxDegradedPerWindow: DEGRADED_MAX_PER_WINDOW,
+        windowSeconds: DEGRADED_WINDOW_SECONDS,
+        reconciliationSeconds: DEGRADED_RECONCILIATION_SECONDS,
+      })
+    : undefined;
+  if (!degradedModeGate) {
+    console.warn("[degraded-mode] disabled — a witness outage will hard-fail transactions (set DEGRADED_MODE_ENABLED=true to opt in)");
+  }
 
   const proxyA = new ProxyAGateway({
     proxyKey,
     proxyBEndpoint: PROXY_B_URL,
     witnessEndpoint: TRUSTAGENT_URL,
+    degradedMode: degradedModeGate,
     ttlSeconds: 60,
   });
 
@@ -117,6 +210,63 @@ async function main(): Promise<void> {
   app.get("/envelopes", (_req, res) => res.json(getEnvelopes()));
   app.get("/thoughts", (_req, res) => res.json(getThoughts()));
   app.get("/verify-chain", (_req, res) => res.json(verifyEnvelopeChain()));
+
+  // Delta #7: reconcile a degraded transaction by retrying the witness
+  // co-sign once it's back. A no-op if already reconciled.
+  app.post("/reconcile/:traceId", async (req, res) => {
+    if (!TRUSTAGENT_URL) {
+      res.status(400).json({ error: "no witness configured" });
+      return;
+    }
+    const traceId = req.params.traceId;
+    const rows = getEnvelopesByTraceId(traceId) as Array<{ type: string; raw_payload: string }>;
+    const intentRow = rows.find((r) => r.type === "INTENT");
+    const acceptanceRow = rows.find((r) => r.type === "ACCEPTANCE");
+    if (rows.some((r) => r.type === "COSIGN")) {
+      res.json({ ok: true, alreadyReconciled: true });
+      return;
+    }
+    if (!intentRow || !acceptanceRow) {
+      res.status(404).json({ error: `no intent/acceptance found for trace ${traceId}` });
+      return;
+    }
+    try {
+      const intent = JSON.parse(intentRow.raw_payload);
+      const acceptance = JSON.parse(acceptanceRow.raw_payload);
+      const resp = await fetch(`${TRUSTAGENT_URL}/co-sign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent, acceptance }),
+      });
+      const body = await resp.json() as { cosign_receipt?: any; error?: string };
+      if (!resp.ok || !body.cosign_receipt) {
+        res.status(502).json({ ok: false, error: body.error ?? "witness declined to co-sign" });
+        return;
+      }
+      saveEnvelope(traceId + ":cosign", "COSIGN", traceId, body.cosign_receipt, JSON.stringify(body.cosign_receipt.signatures));
+      sseBus.broadcast("envelope", { type: "COSIGN", traceId, ts: new Date().toISOString() });
+      console.log(`[bank-a-proxy] RECONCILED ${traceId}`);
+      res.json({ ok: true, cosign_receipt: body.cosign_receipt });
+    } catch (err) {
+      res.status(502).json({ ok: false, error: String(err) });
+    }
+  });
+
+  // Delta #7: audit-side status of a degraded transaction — RECONCILED once
+  // a COSIGN row exists for the trace, EXPIRED_UNRECONCILED past the
+  // deadline with none, PENDING otherwise.
+  app.get("/degraded-status/:traceId", (req, res) => {
+    const traceId = req.params.traceId;
+    const rows = getEnvelopesByTraceId(traceId) as Array<{ type: string; raw_payload: string }>;
+    const degradedRow = rows.find((r) => r.type === "DEGRADED");
+    if (!degradedRow) {
+      res.status(404).json({ error: `no degraded record for trace ${traceId}` });
+      return;
+    }
+    const record: DegradedRecord = JSON.parse(degradedRow.raw_payload);
+    const hasCoSign = rows.some((r) => r.type === "COSIGN");
+    res.json({ ...record, status: reconciliationStatus(record, hasCoSign, new Date().toISOString()) });
+  });
 
   app.post("/cross-check", async (req, res) => {
     const { traceId } = req.body as { traceId: string };
@@ -247,7 +397,7 @@ async function main(): Promise<void> {
         return;
       }
 
-      const { intent_envelope: intent, acceptance_receipt: acceptance, execution_envelope: execution, cosign_receipt: cosign } =
+      const { intent_envelope: intent, acceptance_receipt: acceptance, execution_envelope: execution, cosign_receipt: cosign, degraded_record: degraded } =
         mcpResult.result!._a2a!;
 
       saveEnvelope(intent.trace_id + ":intent", "INTENT", intent.trace_id, intent, JSON.stringify(intent.signatures));
@@ -260,10 +410,22 @@ async function main(): Promise<void> {
         saveEnvelope(cosign.trace_id + ":cosign", "COSIGN", cosign.trace_id, cosign, JSON.stringify(cosign.signatures));
       }
 
+      // Delta #7: the witness was unreachable but degraded-mode allowed the
+      // transaction to proceed anyway (capped, tracked). Persisted honestly
+      // as its own row — never mistaken for a witness co-signature — with a
+      // reconcile_by deadline; see GET /degraded-status/:traceId.
+      if (degraded) {
+        saveEnvelope(degraded.trace_id + ":degraded", "DEGRADED", degraded.trace_id, degraded, DEGRADED_NO_SIGNATURE);
+        console.warn(`[bank-a-proxy] DEGRADED ${degraded.trace_id} — ${degraded.reason} (reconcile by ${degraded.reconcile_by})`);
+      }
+
       sseBus.broadcast("envelope", { type: "INTENT", traceId: intent.trace_id, tool, cost, ts });
       sseBus.broadcast("envelope", { type: "ACCEPTANCE", traceId: acceptance.trace_id, ts });
       if (cosign) {
         sseBus.broadcast("envelope", { type: "COSIGN", traceId: cosign.trace_id, ts });
+      }
+      if (degraded) {
+        sseBus.broadcast("envelope", { type: "DEGRADED", traceId: degraded.trace_id, ts });
       }
 
       sseBus.broadcast("execution-complete", {
@@ -274,6 +436,15 @@ async function main(): Promise<void> {
         ts,
       });
       sseBus.broadcast("envelope", { type: "EXECUTION", traceId: execution.trace_id, ts });
+
+      // Delta #5: persist args/outputData as encrypted, content-addressed WORM
+      // blobs. Today only sha256Json(args)/sha256Json(outputData) survive in
+      // the envelopes (args_hash/output_hash) — this makes the plaintext they
+      // commit to recoverable by a holder, without ever storing it in the
+      // clear ourselves.
+      const outputData: unknown = JSON.parse(mcpResult.result!.content[0].text);
+      await storeWormContent(args);
+      await storeWormContent(outputData);
 
       const contentHash = sha256Json(mcpResult.result!.content);
       const contentSize = Buffer.byteLength(JSON.stringify(mcpResult.result!.content));

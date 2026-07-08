@@ -11,10 +11,14 @@
 import {
   verifyHandshake,
   buildCoSignReceipt,
+  KeyRegistry,
+  didFromKid,
+  type KeyEpoch,
   type IntentEnvelope,
   type AcceptanceReceipt,
   type CoSignReceipt,
   type KeyPair,
+  type SignatureBlock,
 } from "@trustagentai/a2a-core";
 import { appendCoSign, getCoSignByTrace } from "./db.js";
 
@@ -26,14 +30,44 @@ export interface CoSignOutcome {
 }
 
 export class CoSignService {
-  /** kid → public key. Populated by each bank registering with the witness. */
-  private readonly keys = new Map<string, Uint8Array>();
+  /** Append-only key-transparency registry (Delta #6). Populated by each
+   *  bank registering (bootstrap) or rotating (endorsed) with the witness. */
+  private readonly registry = new KeyRegistry();
 
   constructor(private readonly witnessKey: KeyPair) {}
 
-  /** Register a proxy's public key so the witness can verify its signatures. */
-  registerKey(kid: string, publicKeyHex: string): void {
-    this.keys.set(kid, Buffer.from(publicKeyHex, "hex"));
+  /**
+   * Register a proxy's public key so the witness can verify its signatures.
+   * The first registration for a DID is trust-on-first-use; any later one
+   * for the same DID is a rotation and requires `endorsement` — a signature
+   * from the DID's prior key over `buildRotationAttestation(did, kid,
+   * publicKeyHex, timestamp)` (see `@trustagentai/a2a-core`'s
+   * `key-registry.ts`). `timestamp` MUST be the exact value the caller
+   * signed the endorsement over — verification hashes the attestation
+   * object, so a regenerated timestamp here would never match. Throws on an
+   * unendorsed or badly-endorsed rotation.
+   */
+  async registerKey(
+    kid: string,
+    publicKeyHex: string,
+    endorsement?: SignatureBlock,
+    timestamp: string = new Date().toISOString()
+  ): Promise<void> {
+    await this.registry.register(didFromKid(kid), kid, publicKeyHex, timestamp, endorsement);
+  }
+
+  /**
+   * Revoke the currently active key for a DID (identified by any of its
+   * kids). `timestamp` must match what the caller signed into
+   * `{ did, revoke_kid, timestamp }` when producing `endorsement`.
+   */
+  async revokeKey(kid: string, endorsement: SignatureBlock, timestamp: string = new Date().toISOString()): Promise<void> {
+    await this.registry.revoke(didFromKid(kid), timestamp, endorsement);
+  }
+
+  /** Full key-epoch history for a DID (identified by any of its kids) — the transparency log. */
+  getKeyHistory(kid: string): readonly KeyEpoch[] {
+    return this.registry.getHistory(didFromKid(kid));
   }
 
   /**
@@ -48,7 +82,7 @@ export class CoSignService {
       return { ...existing, idempotent: true };
     }
 
-    await verifyHandshake(intent, acceptance, (kid) => this.keys.get(kid));
+    await verifyHandshake(intent, acceptance, (kid) => this.registry.resolveByKid(kid));
     const receipt = await buildCoSignReceipt(intent, acceptance, this.witnessKey);
     const { seq, prev_hash } = appendCoSign(intent.trace_id, receipt);
     return { receipt, seq, prev_hash, idempotent: false };

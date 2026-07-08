@@ -1,6 +1,6 @@
 {
   "name": "@trustagentai/trust-agent-cloud",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "TrustAgentAI Cloud — independent inline co-sign witness (Delta #3). Verifies both proxy signatures, co-signs the transaction, and maintains its own anchored-ready hash-chain.",
   "type": "module",
   "main": "dist/server.js",

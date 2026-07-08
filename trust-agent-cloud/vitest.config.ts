@@ -7,7 +7,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
-      include: ["src/db.ts", "src/witness.ts"],
+      include: ["src/db.ts", "src/witness.ts", "src/blob-db.ts"],
       thresholds: {
         lines: 80,
         functions: 80,
