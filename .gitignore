@@ -46,3 +46,9 @@ docker-compose.override.yml
 *.sqlite
 FETCH_HEAD
 .aider*
+
+# Local-only working/AI-tooling docs, kept on disk but out of version control
+_local-archive/
+
+# Third-party AI-agent skill plugins (installed locally, not project code)
+.agents/skills/

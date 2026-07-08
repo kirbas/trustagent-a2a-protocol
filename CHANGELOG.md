@@ -17,10 +17,6 @@ Full implementation of `docs/execution_plan.md` / `docs/DISPUTE_HARDENING.md`: t
 - `@trustagentai/a2a-core` 0.5.0-alpha.0 → **0.6.0**
 - `@trustagentai/trust-agent-cloud`, Bank-A proxy, Bank-B proxy 1.0.0 → **1.1.0**
 
-### 📝 Documentation
-- `docs/execution_plan.md` §7 handoff status updated — all 7 deltas done.
-- `docs/testing/E2E_ANTIGRAVITY_PROMPT.md` extended with Parts 3b–3f covering Deltas #2–7.
-
 ## [Core Library Audit & D1 Security Fix] - 2026-05-19
 
 ### 🔒 Security
