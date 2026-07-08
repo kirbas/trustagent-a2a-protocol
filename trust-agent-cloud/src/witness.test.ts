@@ -8,6 +8,9 @@ import {
   buildIntentEnvelope,
   buildAcceptanceReceipt,
   verifyCoSignReceipt,
+  buildRotationAttestation,
+  signRotation,
+  signEnvelope,
 } from "@trustagentai/a2a-core";
 import type { KeyPair, IntentEnvelope, AcceptanceReceipt } from "@trustagentai/a2a-core";
 import { initDb, clearCoSigns, getCoSignChain, verifyCoSignChain } from "./db.js";
@@ -22,9 +25,9 @@ interface Handshake {
   proxyBKey: KeyPair;
 }
 
-async function makeHandshake(): Promise<Handshake> {
-  const proxyAKey = await generateKeyPair("did:workload:bank-a-proxy#key-1");
-  const proxyBKey = await generateKeyPair("did:workload:bank-b-proxy#key-1");
+async function makeHandshake(keys?: { proxyAKey: KeyPair; proxyBKey: KeyPair }): Promise<Handshake> {
+  const proxyAKey = keys?.proxyAKey ?? (await generateKeyPair("did:workload:bank-a-proxy#key-1"));
+  const proxyBKey = keys?.proxyBKey ?? (await generateKeyPair("did:workload:bank-b-proxy#key-1"));
   const { envelope: intent } = await buildIntentEnvelope({
     initiatorDid: "did:workload:bank-a-agent",
     vcRef: "vc:test",
@@ -47,8 +50,8 @@ async function makeHandshake(): Promise<Handshake> {
 async function serviceWith(h: Handshake): Promise<{ svc: CoSignService; witnessKey: KeyPair }> {
   const witnessKey = await generateKeyPair("did:workload:trustagent-cloud#key-1");
   const svc = new CoSignService(witnessKey);
-  svc.registerKey(h.proxyAKey.kid, Buffer.from(h.proxyAKey.publicKey).toString("hex"));
-  svc.registerKey(h.proxyBKey.kid, Buffer.from(h.proxyBKey.publicKey).toString("hex"));
+  await svc.registerKey(h.proxyAKey.kid, Buffer.from(h.proxyAKey.publicKey).toString("hex"));
+  await svc.registerKey(h.proxyBKey.kid, Buffer.from(h.proxyBKey.publicKey).toString("hex"));
   return { svc, witnessKey };
 }
 
@@ -120,16 +123,92 @@ describe("CoSignService.coSign", () => {
     const { svc } = await serviceWith(h1);
     const r1 = await svc.coSign(h1.intent, h1.acceptance);
 
-    // Second transaction: re-register the (same-kid) keys for its proxies.
-    const h2 = await makeHandshake();
-    svc.registerKey(h2.proxyAKey.kid, Buffer.from(h2.proxyAKey.publicKey).toString("hex"));
-    svc.registerKey(h2.proxyBKey.kid, Buffer.from(h2.proxyBKey.publicKey).toString("hex"));
+    // Second transaction: same proxy identities (kid + key), already
+    // registered — a real second transaction doesn't re-register a key.
+    const h2 = await makeHandshake({ proxyAKey: h1.proxyAKey, proxyBKey: h1.proxyBKey });
     const r2 = await svc.coSign(h2.intent, h2.acceptance);
 
     expect(r1.seq).toBe(0);
     expect(r2.seq).toBe(1);
     expect(getCoSignChain()).toHaveLength(2);
     expect(verifyCoSignChain().valid).toBe(true);
+  });
+});
+
+describe("CoSignService key-transparency (Delta #6)", () => {
+  it("accepts an endorsed rotation and co-signs under the new key, not the old", async () => {
+    const witnessKey = await generateKeyPair("did:workload:trustagent-cloud#key-1");
+    const svc = new CoSignService(witnessKey);
+    const did = "did:workload:bank-a-proxy";
+    const oldKey = await generateKeyPair(`${did}#key-1`);
+    await svc.registerKey(oldKey.kid, Buffer.from(oldKey.publicKey).toString("hex"));
+
+    const newKey = await generateKeyPair(`${did}#key-2`);
+    const newPubHex = Buffer.from(newKey.publicKey).toString("hex");
+    const rotatedAt = "2026-02-01T00:00:00.000Z";
+    const attestation = buildRotationAttestation(did, newKey.kid, newPubHex, rotatedAt);
+    const endorsement = await signRotation(attestation, oldKey);
+    await expect(svc.registerKey(newKey.kid, newPubHex, endorsement, rotatedAt)).resolves.toBeUndefined();
+
+    const proxyBKey = await generateKeyPair("did:workload:bank-b-proxy#key-1");
+    await svc.registerKey(proxyBKey.kid, Buffer.from(proxyBKey.publicKey).toString("hex"));
+
+    const { envelope: intent } = await buildIntentEnvelope({
+      initiatorDid: "did:workload:bank-a-agent",
+      vcRef: "vc:test",
+      targetDid: "did:workload:bank-b-proxy",
+      mcpDeploymentId: "did:workload:bank-b-proxy",
+      toolName: "execute_wire_transfer",
+      toolSchemaHash: "deadbeef",
+      mcpSessionId: "sess-1",
+      args: { amount: 100 },
+      proxyKey: newKey, // signed with the ROTATED key
+    });
+    const acceptance = await buildAcceptanceReceipt({
+      intentEnvelope: intent,
+      policyEvalInput: { decision: "ACCEPTED" },
+      proxyKey: proxyBKey,
+    });
+
+    await expect(svc.coSign(intent, acceptance)).resolves.toHaveProperty("idempotent", false);
+  });
+
+  it("rejects a rotation with no endorsement, and one endorsed by the wrong key", async () => {
+    const witnessKey = await generateKeyPair("did:workload:trustagent-cloud#key-1");
+    const svc = new CoSignService(witnessKey);
+    const did = "did:workload:bank-a-proxy";
+    const oldKey = await generateKeyPair(`${did}#key-1`);
+    await svc.registerKey(oldKey.kid, Buffer.from(oldKey.publicKey).toString("hex"));
+
+    const newKey = await generateKeyPair(`${did}#key-2`);
+    const newPubHex = Buffer.from(newKey.publicKey).toString("hex");
+
+    await expect(svc.registerKey(newKey.kid, newPubHex)).rejects.toThrow();
+
+    const impostor = await generateKeyPair("impostor");
+    const attestation = buildRotationAttestation(did, newKey.kid, newPubHex, new Date().toISOString());
+    const badEndorsement = await signRotation(attestation, impostor);
+    await expect(svc.registerKey(newKey.kid, newPubHex, badEndorsement)).rejects.toThrow();
+  });
+
+  it("revokes a key, after which it can no longer co-sign for that DID", async () => {
+    const witnessKey = await generateKeyPair("did:workload:trustagent-cloud#key-1");
+    const svc = new CoSignService(witnessKey);
+    const did = "did:workload:bank-a-proxy";
+    const key = await generateKeyPair(`${did}#key-1`);
+    await svc.registerKey(key.kid, Buffer.from(key.publicKey).toString("hex"));
+
+    const revokedAt = "2026-02-01T00:00:00.000Z";
+    const revokeAttestation = { did, revoke_kid: key.kid, timestamp: revokedAt };
+    const revokeEndorsement = await signEnvelope(revokeAttestation, key, "proxy");
+    await expect(svc.revokeKey(key.kid, revokeEndorsement, revokedAt)).resolves.toBeUndefined();
+
+    const history = svc.getKeyHistory(key.kid);
+    expect(history).toHaveLength(1);
+    expect(history[0].validUntil).not.toBeNull();
+    // The kid itself still resolves (past signatures stay verifiable) — only
+    // NEW registrations/rotations for this DID are now blocked without it.
+    await expect(svc.registerKey(`${did}#key-2`, "aa")).rejects.toThrow();
   });
 });
 
