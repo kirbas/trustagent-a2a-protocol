@@ -1,6 +1,6 @@
 {
   "name": "@trustagentai/a2a-core",
-  "version": "0.5.0-alpha.0",
+  "version": "0.6.0",
   "description": "Cryptographic accountability layer for MCP agent-to-agent interactions. Ed25519 receipts, DAG ledger, Merkle batching, Dispute Packs.",
   "type": "module",
   "main": "./dist/src/index.js",

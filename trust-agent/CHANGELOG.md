@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.0 (2026-07-08)
+
+### Added
+- `worm.ts` / `worm-store.ts` (Delta #5): DEK generation, content-addressing (`contentAddress`/`canonicalBytes` — id `== sha256Json(value)`), AES-256-GCM encrypt/decrypt, per-holder DEK wrap/unwrap, `buildWormRecord`/`decryptWormRecord` (regulator escrow entry), `WormBlobStore` (write-once: idempotent on identical re-put, rejects a differing one).
+- `key-registry.ts` (Delta #6): `KeyRegistry` — append-only key-transparency. First registration per DID is trust-on-first-use; every later one is a rotation requiring an endorsement signed by the prior key. `revoke()` closes a validity window without deleting history. `resolveAt(did, timestamp)` answers "which key was valid then" for audit.
+- `degraded-mode.ts` (Delta #7): `DegradedModeGate` (value cap + rolling-window rate cap on witness-outage fallbacks), `buildDegradedRecord`, `reconciliationStatus` (pure PENDING/RECONCILED/EXPIRED_UNRECONCILED).
+- `ProxyBConfig.proxyAPublicKeys` widened to a `PublicKeySource` interface (`{ get(kid) }`) so `KeyRegistry` is a structural drop-in for the old `Map`.
+- `ProxyAConfig` gains an optional `degradedMode` gate; a witness failure now falls back to a capped `degraded_record` instead of always hard-failing, when configured.
+
+### Coverage
+- New modules all ≥94% stmt/branch/func/line; `degraded-mode.ts` and `blob-db.ts`-equivalent pure logic at 100%.
+
 ## v0.5.1 (2026-05-19)
 
 ### Security
