@@ -31,6 +31,8 @@ import type { KeyPair } from "./crypto.js";
 import { buildIntentEnvelope, buildAcceptanceReceipt, buildExecutionEnvelope } from "./envelopes.js";
 import type { IntentEnvelope, AcceptanceReceipt, ExecutionEnvelope, ContentProvenanceReceipt } from "./envelopes.js";
 import type { CoSignReceipt } from "./co-sign.js";
+import { DegradedModeGate } from "./degraded-mode.js";
+import type { DegradedRecord } from "./degraded-mode.js";
 import { DAGLedger } from "./ledger.js";
 import { NonceRegistry } from "./nonce-registry.js";
 import { RiskBudgetEngine } from "./risk-budget.js";
@@ -70,6 +72,9 @@ export interface McpToolResult {
       execution_envelope: ExecutionEnvelope;
       /** Delta #3: inline witness co-signature. Present when a witness is configured. */
       cosign_receipt?: CoSignReceipt;
+      /** Delta #7: present instead of cosign_receipt when the witness was
+       *  unreachable and degraded-mode fallback was configured and allowed. */
+      degraded_record?: DegradedRecord;
     };
   };
   error?: {
@@ -98,6 +103,9 @@ export interface ProxyAConfig {
    *  set, a valid inline co-signature is REQUIRED for the transaction to
    *  finalize; when unset, the gate is skipped (backward compatible). */
   witnessEndpoint?: string;
+  /** Delta #7: when set, a witness failure falls back to a capped, tracked
+   *  degraded record instead of hard-failing the transaction (Decision #8). */
+  degradedMode?: DegradedModeGate;
   ttlSeconds?: number;
 }
 
@@ -161,6 +169,7 @@ export class ProxyAGateway {
     // signatures and co-signs. Without a valid co-signature the transaction is
     // NOT finalized and the tool is NOT executed — the finality gate.
     let cosign: CoSignReceipt | undefined;
+    let degraded: DegradedRecord | undefined;
     if (this.cfg.witnessEndpoint) {
       try {
         const resp = await fetch(`${this.cfg.witnessEndpoint}/co-sign`, {
@@ -170,11 +179,18 @@ export class ProxyAGateway {
         });
         const body = await resp.json() as { cosign_receipt?: CoSignReceipt; error?: string };
         if (!resp.ok || !body.cosign_receipt) {
-          return this._mcpError(call.id, ERR_WITNESS_UNAVAILABLE, body.error ?? "Witness declined to co-sign", { traceId: intentEnv.trace_id });
+          degraded = this._tryDegraded(intentEnv.trace_id, p._estimated_cost_usd ?? 0, body.error ?? "Witness declined to co-sign");
+          if (!degraded) {
+            return this._mcpError(call.id, ERR_WITNESS_UNAVAILABLE, body.error ?? "Witness declined to co-sign", { traceId: intentEnv.trace_id });
+          }
+        } else {
+          cosign = body.cosign_receipt;
         }
-        cosign = body.cosign_receipt;
       } catch (err) {
-        return this._mcpError(call.id, ERR_WITNESS_UNAVAILABLE, `Witness unreachable: ${err}`, { traceId: intentEnv.trace_id });
+        degraded = this._tryDegraded(intentEnv.trace_id, p._estimated_cost_usd ?? 0, `Witness unreachable: ${err}`);
+        if (!degraded) {
+          return this._mcpError(call.id, ERR_WITNESS_UNAVAILABLE, `Witness unreachable: ${err}`, { traceId: intentEnv.trace_id });
+        }
       }
     }
 
@@ -229,9 +245,24 @@ export class ProxyAGateway {
           acceptance_receipt: acceptance,
           execution_envelope: finalExecutionEnv,
           ...(cosign ? { cosign_receipt: cosign } : {}),
+          ...(degraded ? { degraded_record: degraded } : {}),
         },
       },
     };
+  }
+
+  /**
+   * Decide whether a witness failure may fall back to degraded mode.
+   * Returns undefined (caller must hard-fail) when degraded mode isn't
+   * configured or the gate refuses (value/rate cap) — preserving today's
+   * behavior by default.
+   */
+  private _tryDegraded(traceId: string, valueUsd: number, reason: string): DegradedRecord | undefined {
+    if (!this.cfg.degradedMode) return undefined;
+    const now = new Date().toISOString();
+    const decision = this.cfg.degradedMode.evaluate(valueUsd, now);
+    if (!decision.allowed) return undefined;
+    return { trace_id: traceId, reason, timestamp: now, reconcile_by: decision.reconcileBy };
   }
 
   private _mcpError(id: string | number, code: number, message: string, data?: unknown): McpToolResult {
