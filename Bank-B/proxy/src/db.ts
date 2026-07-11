@@ -255,8 +255,6 @@ export function saveThought(source: string, text: string): void {
   const now = new Date().toISOString();
   db.prepare("INSERT INTO thoughts (source, text, created_at) VALUES (?, ?, ?)")
     .run(source, text, now);
-  
-  sseBus?.broadcast("thought", { source, text, ts: now });
 }
 
 export function getThoughts(): any[] {

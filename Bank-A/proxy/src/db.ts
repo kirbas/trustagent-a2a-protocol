@@ -114,10 +114,9 @@ export function saveEnvelope(
   });
   append();
 
-  // Concurrent SSE broadcast
-  sseBus?.broadcast("envelope", { id, type, trace_id: traceId, created_at: now });
-
-  // Phase transition trigger
+  // Phase transition trigger — server.ts broadcasts the "envelope" event
+  // itself at each saveEnvelope call site, so this is the only SSE event
+  // this module emits.
   if (type === "INTENT") {
     sseBus?.broadcast("system-phase", { phase: "RUNNING" });
   }
@@ -159,9 +158,6 @@ export function saveThought(source: string, text: string): void {
   const now = new Date().toISOString();
   db.prepare("INSERT INTO thoughts (source, text, created_at) VALUES (?, ?, ?)")
     .run(source, text, now);
-  
-  // Concurrent SSE broadcast for real-time UI
-  sseBus?.broadcast("thought", { source, text, ts: now });
 }
 
 export function getThoughts(): any[] {

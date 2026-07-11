@@ -13,7 +13,6 @@
 
 import Database from "better-sqlite3";
 import { initBlobTable, createBlobStore, type BlobStore } from "@trustagentai/a2a-core";
-export type { StoredBlob, BlobInput, PutBlobResult } from "@trustagentai/a2a-core";
 
 const TABLE = "content_blobs";
 let store: BlobStore;
@@ -27,5 +26,3 @@ export function initWormDb(path: string): void {
 }
 
 export const putContentBlob: BlobStore["putBlob"] = (contentHash, blob) => store.putBlob(contentHash, blob);
-export const getContentBlob: BlobStore["getBlob"] = (contentHash) => store.getBlob(contentHash);
-export const clearContentBlobs: BlobStore["clearBlobs"] = () => store.clearBlobs();
