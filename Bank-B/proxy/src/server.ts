@@ -8,7 +8,6 @@ import {
   NonceRegistry,
   RiskBudgetEngine,
   KeyRegistry,
-  didFromKid,
   type PublicKeySource,
   type IntentEnvelope,
   type ExecutionEnvelope,
@@ -177,7 +176,7 @@ async function main(): Promise<void> {
       return;
     }
     try {
-      await proxyAPublicKeys.register(didFromKid(kid), kid, publicKeyHex, timestamp ?? new Date().toISOString(), endorsement);
+      await proxyAPublicKeys.registerByKid(kid, publicKeyHex, endorsement, timestamp);
       console.log(`[bank-b-proxy] registered peer key: ${kid}`);
       res.json({ ok: true });
     } catch (err) {
@@ -199,7 +198,7 @@ async function main(): Promise<void> {
       return;
     }
     try {
-      await proxyAPublicKeys.revoke(didFromKid(kid), timestamp, endorsement);
+      await proxyAPublicKeys.revokeByKid(kid, endorsement, timestamp);
       console.log(`[bank-b-proxy] revoked key: ${kid}`);
       res.json({ ok: true });
     } catch (err) {
@@ -209,7 +208,7 @@ async function main(): Promise<void> {
   });
 
   app.get("/key-history/:kid", (req, res) => {
-    const history = proxyAPublicKeys.getHistory(didFromKid(req.params.kid)).map((e) => ({
+    const history = proxyAPublicKeys.historyByKid(req.params.kid).map((e) => ({
       kid: e.kid,
       publicKeyHex: Buffer.from(e.publicKey).toString("hex"),
       validFrom: e.validFrom,

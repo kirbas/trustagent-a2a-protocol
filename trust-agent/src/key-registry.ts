@@ -142,4 +142,25 @@ export class KeyRegistry {
   getHistory(did: string): readonly KeyEpoch[] {
     return this.epochsByDid.get(did) ?? [];
   }
+
+  // ─── kid-keyed convenience wrappers ────────────────────────────────────────
+  // A caller with an HTTP request usually only has a kid, not its DID — these
+  // derive it via didFromKid so every call site doesn't have to.
+
+  registerByKid(
+    kid: string,
+    publicKeyHex: string,
+    endorsement?: SignatureBlock,
+    now: string = new Date().toISOString()
+  ): Promise<void> {
+    return this.register(didFromKid(kid), kid, publicKeyHex, now, endorsement);
+  }
+
+  revokeByKid(kid: string, endorsement: SignatureBlock, now: string = new Date().toISOString()): Promise<void> {
+    return this.revoke(didFromKid(kid), now, endorsement);
+  }
+
+  historyByKid(kid: string): readonly KeyEpoch[] {
+    return this.getHistory(didFromKid(kid));
+  }
 }

@@ -142,3 +142,33 @@ describe("KeyRegistry.revoke", () => {
     await expect(registry.revoke(DID, "2026-01-01T00:00:00.000Z", endorsement)).rejects.toThrow();
   });
 });
+
+describe("KeyRegistry *ByKid convenience methods (DRY: kid -> did derivation)", () => {
+  it("registerByKid derives the DID from the kid and registers exactly like register()", async () => {
+    const registry = new KeyRegistry();
+    const key = await generateKeyPair(`${DID}#key-1`);
+    await registry.registerByKid(key.kid, Buffer.from(key.publicKey).toString("hex"), undefined, "2026-01-01T00:00:00.000Z");
+    expect(registry.resolveByKid(key.kid)).toEqual(key.publicKey);
+    expect(registry.historyByKid(key.kid)).toHaveLength(1);
+  });
+
+  it("revokeByKid derives the DID from the kid and revokes exactly like revoke()", async () => {
+    const registry = new KeyRegistry();
+    const key = await generateKeyPair(`${DID}#key-1`);
+    const pubHex = Buffer.from(key.publicKey).toString("hex");
+    await registry.registerByKid(key.kid, pubHex, undefined, "2026-01-01T00:00:00.000Z");
+
+    const now = "2026-02-01T00:00:00.000Z";
+    const endorsement = await signEnvelope({ did: DID, revoke_kid: key.kid, timestamp: now }, key, "proxy");
+    await registry.revokeByKid(key.kid, endorsement, now);
+
+    expect(registry.resolveAt(DID, "2026-03-01T00:00:00.000Z")).toBeUndefined();
+  });
+
+  it("historyByKid returns the same history as getHistory(didFromKid(kid))", async () => {
+    const registry = new KeyRegistry();
+    const key = await generateKeyPair(`${DID}#key-1`);
+    await registry.registerByKid(key.kid, Buffer.from(key.publicKey).toString("hex"), undefined, "2026-01-01T00:00:00.000Z");
+    expect(registry.historyByKid(key.kid)).toEqual(registry.getHistory(DID));
+  });
+});
