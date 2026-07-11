@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { createHash, randomUUID } from "crypto";
+import { fileURLToPath } from "url";
 import {
   loadOrCreateKeyPair,
   ProxyAGateway,
@@ -17,6 +18,7 @@ import {
 } from "@trustagentai/a2a-core";
 import {
   initDb,
+  setSseBus,
   saveEnvelope,
   getEnvelopes,
   saveProvenance,
@@ -69,26 +71,20 @@ function parseContentKek(envVar: string): Buffer | undefined {
   return Buffer.from(value, "hex");
 }
 
-async function main(): Promise<void> {
-  if (!KEYSTORE_KEK) {
-    throw new Error("KEYSTORE_KEK env var is required to load/create the proxy identity keystore");
-  }
-  const proxyKey = await loadOrCreateKeyPair(PROXY_KID, KEYSTORE_PATH, KEYSTORE_KEK);
+export interface ServerConfig {
+  dbPath: string;
+  wormDbPath: string;
+  keystorePath: string;
+  keystoreKek: string;
+}
 
-  try {
-    const BANK_A_DID = "did:workload:bank-a-proxy";
-    await registerWithProxyB(
-      PROXY_B_URL,
-      `${BANK_A_DID}#key-1`,
-      Buffer.from(proxyKey.publicKey).toString("hex")
-    );
-  } catch (e) {
-    console.warn("[key-exchange] registration failed", e);
-  }
+export async function buildServer(config: ServerConfig): Promise<{ app: express.Express }> {
+  const proxyKey = await loadOrCreateKeyPair(PROXY_KID, config.keystorePath, config.keystoreKek);
 
-  initDb(DB_PATH);
-  initWormDb(WORM_DB_PATH);
+  initDb(config.dbPath);
+  initWormDb(config.wormDbPath);
   const sseBus = new SseBus();
+  setSseBus(sseBus);
 
   // Delta #5: WORM content store holders. Bank-A is the plaintext origin, so
   // it builds the encrypted record and wraps the DEK for every cross-held
@@ -155,7 +151,11 @@ async function main(): Promise<void> {
   });
 
   const publicKeyHex = Buffer.from(proxyKey.publicKey).toString("hex");
-  await registerWithProxyB(PROXY_B_URL, PROXY_KID, publicKeyHex);
+  try {
+    await registerWithProxyB(PROXY_B_URL, PROXY_KID, publicKeyHex);
+  } catch (e) {
+    console.warn("[key-exchange] registration failed", e);
+  }
 
   // Delta #3: register our key with the independent witness so it can verify
   // our Intent signature before co-signing (finality gate).
@@ -384,7 +384,7 @@ async function main(): Promise<void> {
     try {
       let mcpResult = await proxyA.forwardToolCall(call, executor);
 
-      if (mcpResult.error && String(mcpResult.error).includes("Unknown key")) {
+      if (mcpResult.error?.message?.includes("Unknown key")) {
         console.log("[bank-a-proxy] key not recognized by Proxy B — re-registering and retrying");
         await registerWithProxyB(PROXY_B_URL, PROXY_KID, publicKeyHex);
         mcpResult = await proxyA.forwardToolCall(call, executor);
@@ -470,10 +470,26 @@ async function main(): Promise<void> {
     }
   });
 
+  return { app };
+}
+
+async function main(): Promise<void> {
+  if (!KEYSTORE_KEK) {
+    throw new Error("KEYSTORE_KEK env var is required to load/create the proxy identity keystore");
+  }
+  const { app } = await buildServer({
+    dbPath: DB_PATH,
+    wormDbPath: WORM_DB_PATH,
+    keystorePath: KEYSTORE_PATH,
+    keystoreKek: KEYSTORE_KEK,
+  });
   app.listen(PORT, () => console.log(`TrustAgentAI Proxy A listening on :${PORT}`));
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only run the server when this file is executed directly (not when imported, e.g. by tests).
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

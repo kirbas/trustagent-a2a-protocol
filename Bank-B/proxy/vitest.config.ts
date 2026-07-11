@@ -7,7 +7,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
-      include: ["src/crypto.ts", "src/hash-chain.ts", "src/co-sign.ts", "src/worm.ts", "src/worm-store.ts", "src/key-registry.ts", "src/degraded-mode.ts", "src/blob-store-sql.ts", "src/envelopes.ts", "src/ledger.ts", "src/nonce-registry.ts", "src/risk-budget.ts", "src/trust-proxy.ts"],
+      include: ["src/db.ts", "src/key-exchange.ts", "src/server.ts"],
       thresholds: {
         lines: 80,
         functions: 80,

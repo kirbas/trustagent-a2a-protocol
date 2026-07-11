@@ -13,3 +13,4 @@ export * from "./worm.js";
 export * from "./worm-store.js";
 export * from "./key-registry.js";
 export * from "./degraded-mode.js";
+export * from "./blob-store-sql.js";

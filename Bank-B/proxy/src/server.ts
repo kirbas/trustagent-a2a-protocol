@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { createHash } from "crypto";
+import { fileURLToPath } from "url";
 import {
   loadOrCreateKeyPair,
   ProxyBGateway,
@@ -8,7 +9,6 @@ import {
   NonceRegistry,
   RiskBudgetEngine,
   KeyRegistry,
-  didFromKid,
   type PublicKeySource,
   type IntentEnvelope,
   type ExecutionEnvelope,
@@ -16,9 +16,10 @@ import {
   type SignatureBlock,
   signEnvelope,
 } from "@trustagentai/a2a-core";
-import { 
-  initDb, 
-  saveEnvelope, 
+import {
+  initDb,
+  setSseBus,
+  saveEnvelope,
   getEnvelopes, 
   clearEnvelopes, 
   getEnvelopesByTraceId, 
@@ -90,13 +91,17 @@ function initProxyB(proxyBKey: KeyPair, proxyAPublicKeys: PublicKeySource) {
   });
 }
 
-async function main(): Promise<void> {
-  if (!KEYSTORE_KEK) {
-    throw new Error("KEYSTORE_KEK env var is required to load/create the proxy identity keystore");
-  }
-  const proxyKey = await loadOrCreateKeyPair(PROXY_KID, KEYSTORE_PATH, KEYSTORE_KEK);
-  initDb(DB_PATH);
+export interface ServerConfig {
+  dbPath: string;
+  keystorePath: string;
+  keystoreKek: string;
+}
+
+export async function buildServer(config: ServerConfig): Promise<{ app: express.Express }> {
+  const proxyKey = await loadOrCreateKeyPair(PROXY_KID, config.keystorePath, config.keystoreKek);
+  initDb(config.dbPath);
   const sseBus = new SseBus();
+  setSseBus(sseBus);
 
   const proxyAPublicKeys = new KeyRegistry();
   initProxyB(proxyKey, proxyAPublicKeys);
@@ -177,7 +182,7 @@ async function main(): Promise<void> {
       return;
     }
     try {
-      await proxyAPublicKeys.register(didFromKid(kid), kid, publicKeyHex, timestamp ?? new Date().toISOString(), endorsement);
+      await proxyAPublicKeys.registerByKid(kid, publicKeyHex, endorsement, timestamp);
       console.log(`[bank-b-proxy] registered peer key: ${kid}`);
       res.json({ ok: true });
     } catch (err) {
@@ -199,7 +204,7 @@ async function main(): Promise<void> {
       return;
     }
     try {
-      await proxyAPublicKeys.revoke(didFromKid(kid), timestamp, endorsement);
+      await proxyAPublicKeys.revokeByKid(kid, endorsement, timestamp);
       console.log(`[bank-b-proxy] revoked key: ${kid}`);
       res.json({ ok: true });
     } catch (err) {
@@ -209,7 +214,7 @@ async function main(): Promise<void> {
   });
 
   app.get("/key-history/:kid", (req, res) => {
-    const history = proxyAPublicKeys.getHistory(didFromKid(req.params.kid)).map((e) => ({
+    const history = proxyAPublicKeys.historyByKid(req.params.kid).map((e) => ({
       kid: e.kid,
       publicKeyHex: Buffer.from(e.publicKey).toString("hex"),
       validFrom: e.validFrom,
@@ -455,10 +460,25 @@ async function main(): Promise<void> {
     }
   });
 
+  return { app };
+}
+
+async function main(): Promise<void> {
+  if (!KEYSTORE_KEK) {
+    throw new Error("KEYSTORE_KEK env var is required to load/create the proxy identity keystore");
+  }
+  const { app } = await buildServer({
+    dbPath: DB_PATH,
+    keystorePath: KEYSTORE_PATH,
+    keystoreKek: KEYSTORE_KEK,
+  });
   app.listen(PORT, () => console.log(`TrustAgentAI Proxy B listening on :${PORT}`));
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only run the server when this file is executed directly (not when imported, e.g. by tests).
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

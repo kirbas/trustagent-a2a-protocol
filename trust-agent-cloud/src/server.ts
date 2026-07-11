@@ -14,8 +14,9 @@
 
 import express from "express";
 import cors from "cors";
+import { fileURLToPath } from "url";
 import { loadOrCreateKeyPair } from "@trustagentai/a2a-core";
-import type { IntentEnvelope, AcceptanceReceipt, SignatureBlock } from "@trustagentai/a2a-core";
+import type { IntentEnvelope, AcceptanceReceipt, SignatureBlock, KeyPair } from "@trustagentai/a2a-core";
 import { initDb, verifyCoSignChain, clearCoSigns } from "./db.js";
 import { CoSignService } from "./witness.js";
 import { initBlobDb, putBlob, getBlob, clearBlobs, type BlobInput } from "./blob-db.js";
@@ -26,13 +27,17 @@ const KEYSTORE_PATH = process.env.KEYSTORE_PATH ?? "/data/trust-agent-cloud-keys
 const KEYSTORE_KEK = process.env.KEYSTORE_KEK;
 const WITNESS_KID = "did:workload:trustagent-cloud#key-1";
 
-async function main(): Promise<void> {
-  if (!KEYSTORE_KEK) {
-    throw new Error("KEYSTORE_KEK env var is required to load/create the witness identity keystore");
-  }
-  const witnessKey = await loadOrCreateKeyPair(WITNESS_KID, KEYSTORE_PATH, KEYSTORE_KEK);
-  initDb(DB_PATH);
-  initBlobDb(DB_PATH);
+export interface ServerConfig {
+  dbPath: string;
+  keystorePath: string;
+  keystoreKek: string;
+}
+
+/** Builds the Express app and wires all routes, without binding to a port. */
+export async function buildServer(config: ServerConfig): Promise<{ app: express.Express; witnessKey: KeyPair }> {
+  const witnessKey = await loadOrCreateKeyPair(WITNESS_KID, config.keystorePath, config.keystoreKek);
+  initDb(config.dbPath);
+  initBlobDb(config.dbPath);
   const service = new CoSignService(witnessKey);
 
   const app = express();
@@ -164,12 +169,27 @@ async function main(): Promise<void> {
     res.json({ ok: true });
   });
 
+  return { app, witnessKey };
+}
+
+async function main(): Promise<void> {
+  if (!KEYSTORE_KEK) {
+    throw new Error("KEYSTORE_KEK env var is required to load/create the witness identity keystore");
+  }
+  const { app, witnessKey } = await buildServer({
+    dbPath: DB_PATH,
+    keystorePath: KEYSTORE_PATH,
+    keystoreKek: KEYSTORE_KEK,
+  });
   app.listen(PORT, () =>
     console.log(`TrustAgentAI Cloud witness listening on :${PORT} (kid=${witnessKey.kid})`)
   );
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only run the server when this file is executed directly (not when imported, e.g. by tests).
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

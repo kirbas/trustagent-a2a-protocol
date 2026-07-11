@@ -12,7 +12,6 @@ import {
   verifyHandshake,
   buildCoSignReceipt,
   KeyRegistry,
-  didFromKid,
   type KeyEpoch,
   type IntentEnvelope,
   type AcceptanceReceipt,
@@ -47,13 +46,13 @@ export class CoSignService {
    * object, so a regenerated timestamp here would never match. Throws on an
    * unendorsed or badly-endorsed rotation.
    */
-  async registerKey(
+  registerKey(
     kid: string,
     publicKeyHex: string,
     endorsement?: SignatureBlock,
     timestamp: string = new Date().toISOString()
   ): Promise<void> {
-    await this.registry.register(didFromKid(kid), kid, publicKeyHex, timestamp, endorsement);
+    return this.registry.registerByKid(kid, publicKeyHex, endorsement, timestamp);
   }
 
   /**
@@ -61,13 +60,13 @@ export class CoSignService {
    * kids). `timestamp` must match what the caller signed into
    * `{ did, revoke_kid, timestamp }` when producing `endorsement`.
    */
-  async revokeKey(kid: string, endorsement: SignatureBlock, timestamp: string = new Date().toISOString()): Promise<void> {
-    await this.registry.revoke(didFromKid(kid), timestamp, endorsement);
+  revokeKey(kid: string, endorsement: SignatureBlock, timestamp: string = new Date().toISOString()): Promise<void> {
+    return this.registry.revokeByKid(kid, endorsement, timestamp);
   }
 
   /** Full key-epoch history for a DID (identified by any of its kids) — the transparency log. */
   getKeyHistory(kid: string): readonly KeyEpoch[] {
-    return this.registry.getHistory(didFromKid(kid));
+    return this.registry.historyByKid(kid);
   }
 
   /**
